@@ -40,6 +40,8 @@ module Fluent::Plugin
       @controllerData = {}
       @podInventoryE2EProcessingLatencyMs = 0
       @podsAPIE2ELatencyMs = 0    
+
+      @noticeHash = {}
       
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
@@ -79,6 +81,7 @@ module Fluent::Plugin
         @condition = ConditionVariable.new
         @mutex = Mutex.new
         @thread = Thread.new(&method(:run_periodic))
+        @watchthread = Thread.new(&method(:watch))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
       end
     end
@@ -91,6 +94,29 @@ module Fluent::Plugin
         }
         @thread.join
         super # This super must be at the end of shutdown method
+      end
+    end
+
+    def watch
+      $log.info("in_kube_podinventory::watch: entered watch function")
+      begin
+        KubernetesApiClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
+              if !notice["object"].nil? && !notice["object"].empty?
+                  $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
+
+                  item = notice["object"]
+                  record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
+
+                  @mutex.synchronize {
+                    $log.info("in_kube_podinventory::watch : about to add item to noticeHash. Time: #{Time.now.utc.iso8601}")
+                    @noticeHash[item["metadata"]["uid"]] = record
+                    $log.info("in_kube_podinventory::watch : successfully added item to noticeHash. Time: #{Time.now.utc.iso8601}")
+                  }
+              end
+          end
+      rescue => exception
+          $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
+          $log.debug_backtrace(exception.backtrace)
       end
     end
 
@@ -134,6 +160,7 @@ module Fluent::Plugin
         continuationToken = nil
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
+        @collection_version = podInventory["metadata"]["resourceVersion"]
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
