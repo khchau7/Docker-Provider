@@ -52,6 +52,9 @@ sudo apt-get install ruby2.6 ruby2.6-dev gcc make -y
 gem install fluentd -v "1.12.2" --no-document
 fluentd --setup ./fluent
 gem install gyoku iso8601 --no-doc
+# kubeclient gem
+apt-get install libmagickwand-dev
+gem install kubeclient --no-document
 
 
 rm -f $TMPDIR/docker-cimprov*.sh

@@ -3,6 +3,7 @@
 
 require 'fluent/plugin/input'
 
+
 module Fluent::Plugin
   require_relative "podinventory_to_mdm"
 
@@ -20,6 +21,7 @@ module Fluent::Plugin
       require "yajl"
       require "set"
       require "time"
+      require "kubeclient"
 
       require_relative "kubernetes_container_inventory"
       require_relative "KubernetesApiClient"
@@ -114,7 +116,7 @@ module Fluent::Plugin
       # TODO: delete later, don't want to make another API call here
       File.open("testing-podinventory.json", "w")
       $log.info("in_kube_podinventory::watch : successfully opened json file for writing")
-      
+
       @podsAPIE2ELatencyMs = 0
       podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
       # Initializing continuation token to nil
@@ -155,21 +157,22 @@ module Fluent::Plugin
         $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods")
         begin
           KubernetesApiClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
-                if !notice["object"].nil? && !notice["object"].empty?
-                    $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
+                $log.info("in_kube_podinventory::watch: inside watch pods! Time: #{Time.now.utc.iso8601}")
+                # if !notice["object"].nil? && !notice["object"].empty?
+                #     $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
 
-                    item = notice["object"]
-                    record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
-                    $log.info("in_kube_podinventory::watch: successfully created a record with notice")
+                #     item = notice["object"]
+                #     record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
+                #     $log.info("in_kube_podinventory::watch: successfully created a record with notice")
 
-                    @mutex.synchronize {
-                      $log.info("in_kube_podinventory::watch : about to add item to noticeHash. Time: #{Time.now.utc.iso8601}")
-                      @noticeHash[item["metadata"]["uid"]] = record
-                      $log.info("in_kube_podinventory::watch : successfully added item to noticeHash. Time: #{Time.now.utc.iso8601}")
-                    }
-                else
-                  $log.info("in_kube_pod_inventory::watch: notice object was either null or empty")
-                end
+                #     # @mutex.synchronize {
+                #     $log.info("in_kube_podinventory::watch : about to add item to noticeHash. Time: #{Time.now.utc.iso8601}")
+                #     @noticeHash[item["metadata"]["uid"]] = record
+                #     $log.info("in_kube_podinventory::watch : successfully added item to noticeHash. Time: #{Time.now.utc.iso8601}")
+                #     # }
+                # else
+                #   $log.info("in_kube_pod_inventory::watch: notice object was either null or empty")
+                # end
             end
         rescue => exception
             $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
