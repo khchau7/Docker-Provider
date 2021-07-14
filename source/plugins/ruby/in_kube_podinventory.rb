@@ -101,6 +101,12 @@ module Fluent::Plugin
 
     def watch
       $log.info("in_kube_podinventory::watch: entered watch function")
+
+      # TODO: delete later, don't want to make another API call here
+      continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
+      @collection_version = podInventory["metadata"]["resourceVersion"]
+      @log.info("in_kube_podinventory::watch : received collection version: #{@collection_version}")
+
       begin
         KubernetesApiClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
               if !notice["object"].nil? && !notice["object"].empty?
@@ -108,6 +114,7 @@ module Fluent::Plugin
 
                   item = notice["object"]
                   record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
+                  $log.info("in_kube_podinventory::watch: successfully created a record with notice")
 
                   @mutex.synchronize {
                     $log.info("in_kube_podinventory::watch : about to add item to noticeHash. Time: #{Time.now.utc.iso8601}")
@@ -119,6 +126,7 @@ module Fluent::Plugin
       rescue => exception
           $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
           $log.debug_backtrace(exception.backtrace)
+          $log.info("watch events session broken backtrace: #{exception.backtrace}")
       end
     end
 
@@ -163,6 +171,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
         @collection_version = podInventory["metadata"]["resourceVersion"]
+        @log.info("in_kube_podinventory::enumerate : received collection version: #{@collection_version}")
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
