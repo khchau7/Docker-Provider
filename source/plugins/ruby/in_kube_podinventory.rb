@@ -80,7 +80,9 @@ module Fluent::Plugin
         @finished = false
         @condition = ConditionVariable.new
         @mutex = Mutex.new
+        $log.info("in_kube:podinventory::start: khushi debugging about to start thread for run_periodic")
         @thread = Thread.new(&method(:run_periodic))
+        $log.info("in_kube:podinventory::start: khushi debugging about to start thread for watch")
         @watchthread = Thread.new(&method(:watch))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
       end
