@@ -78,6 +78,14 @@ module Fluent::Plugin
           $log.warn("in_kube_podinventory::start: setting to default value since got PODS_EMIT_STREAM_BATCH_SIZE nil or empty")
           @PODS_EMIT_STREAM_BATCH_SIZE = 200
         end
+        # create kubernetes watch client
+        ssl_options = {
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+          verify_ssl: OpenSSL::SSL::VERIFY_PEER,
+        }
+        getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
+        auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
+        @KubernetesWatchClient = Kubeclient::Client.new('https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/', "v1", ssl_options: ssl_options, auth_options: auth_options)
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
         @condition = ConditionVariable.new
@@ -156,7 +164,7 @@ module Fluent::Plugin
       loop do
         $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods")
         begin
-          KubernetesApiClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
+          @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
                 $log.info("in_kube_podinventory::watch: inside watch pods! Time: #{Time.now.utc.iso8601}")
                 # if !notice["object"].nil? && !notice["object"].empty?
                 #     $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
