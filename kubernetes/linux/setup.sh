@@ -53,7 +53,7 @@ gem install fluentd -v "1.12.2" --no-document
 fluentd --setup ./fluent
 gem install gyoku iso8601 --no-doc
 # kubeclient gem
-apt-get install libmagickwand-dev
+apt-get install libmagickwand-dev -y
 gem install kubeclient --no-document
 
 
