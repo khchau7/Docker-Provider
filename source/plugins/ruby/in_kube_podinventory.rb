@@ -85,7 +85,8 @@ module Fluent::Plugin
         }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
-        @KubernetesWatchClient = Kubeclient::Client.new('https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/', "v1", ssl_options: ssl_options, auth_options: auth_options)
+        @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed)
+        $log.info("in_kube:podinventory::start: successfully created kubernetes watch client")
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
         @condition = ConditionVariable.new
@@ -109,21 +110,18 @@ module Fluent::Plugin
       end
     end
 
-    def write_to_file(podInventory)
-      $log.info("in_kube_podinventory::write_to_file: inside write to file function")
-
-      File.write("testing-podinventory.json", JSON.pretty_generate(podInventory))
-
-      $log.info("in_kube_podinventory::write_to_file: successfully done writing to file")
-
-    end
+    # def write_to_file(podInventory)
+    #   $log.info("in_kube_podinventory::write_to_file: inside write to file function")
+    #   File.write("testing-podinventory.json", JSON.pretty_generate(podInventory))
+    #   $log.info("in_kube_podinventory::write_to_file: successfully done writing to file")
+    # end
 
     def watch
       $log.info("in_kube_podinventory::watch: entered watch function")
 
       # TODO: delete later, don't want to make another API call here
-      File.open("testing-podinventory.json", "w")
-      $log.info("in_kube_podinventory::watch : successfully opened json file for writing")
+      # File.open("testing-podinventory.json", "w")
+      # $log.info("in_kube_podinventory::watch : successfully opened json file for writing")
 
       @podsAPIE2ELatencyMs = 0
       podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
@@ -138,7 +136,8 @@ module Fluent::Plugin
       @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
       if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
         $log.info("in_kube_podinventory::watch : number of pod items :#{podInventory["items"].length}  from Kube API @ #{Time.now.utc.iso8601}")
-        write_to_file(podInventory)
+        $log.info("in_kube_podinventory::watch : time to write to a file and emit to backend - functionality later")
+        # write_to_file(podInventory)
         # parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
       else
         $log.warn "in_kube_podinventory::watch:Received empty podInventory"
@@ -146,26 +145,28 @@ module Fluent::Plugin
 
       #If we receive a continuation token, make calls, process and flush data until we have processed all data
       while (!continuationToken.nil? && !continuationToken.empty?)
+        $log.info("in_kube_podinventory::watch : continuation token was not null or empty so round two of gettings pod inventory")
         podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}&continue=#{continuationToken}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
         if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
           $log.info("in_kube_podinventory::watch : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-          write_to_file(podInventory)
+          # write_to_file(podInventory)
           # parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
         else
           $log.warn "in_kube_podinventory::watch:Received empty podInventory"
         end
       end
 
-      $log.info("finished initial write to pod inventory file")
+      # $log.info("finished initial write to pod inventory file")
+      $log.info("in_kube_podinventory::watch : finished getting pods, about to begin infinite loop for watch")
 
       loop do
         $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods")
         begin
           @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
-                $log.info("in_kube_podinventory::watch: inside watch pods! Time: #{Time.now.utc.iso8601}")
+                $log.info("in_kube_podinventory::watch: received a notice, inside watch pods! Time: #{Time.now.utc.iso8601}")
                 # if !notice["object"].nil? && !notice["object"].empty?
                 #     $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
 
