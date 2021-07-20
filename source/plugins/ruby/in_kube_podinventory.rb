@@ -178,9 +178,9 @@ module Fluent::Plugin
         $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
           @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
-            puts "in_kube_podinventory::watch : inside watch pods! Time: #{Time.now.utc.iso8601}"
+            $log.info("in_kube_podinventory::watch : inside watch pods! Time: #{Time.now.utc.iso8601}")
             if !notice.nil? && !notice.empty?
-              puts "in_kube_podinventory::watch : received a notice that is not null and not empty, type: #{notice["type"]}"
+              $log.info("in_kube_podinventory::watch : received a notice that is not null and not empty, type: #{notice["type"]}")
 
               item = notice["object"]
               record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
@@ -189,7 +189,7 @@ module Fluent::Plugin
                   @noticeHash[item["metadata"]["uid"]] = record
               }
 
-              puts "watch pods:: number of items in noticeHash = #{@noticeHash.size}"
+              $log.info("watch pods:: number of items in noticeHash = #{@noticeHash.size}")
             end
           end
         rescue => exception
@@ -483,65 +483,68 @@ module Fluent::Plugin
     end
 
     def merge_info
+      $log.info("merge_info:: enters this function, about to begin read file")
       begin
         fileContents = File.read("testing-podinventory.json")
-        puts "in_kube_podinventory::merge_info : file contents read"
+        $log.info("in_kube_podinventory::merge_info : file contents read")
         @podHash = JSON.parse(fileContents)
-        puts "in_kube_podinventory::merge_info : parse successful"
+        $log.info("in_kube_podinventory::merge_info : parse successful")
       rescue => error
-          puts "in_kube_podinventory::merge_info : something went wrong with reading file"
-          puts "in_kube_podinventory::merge_info : backtrace: #{error.backtrace}"
+        $log.info("in_kube_podinventory::merge_info : something went wrong with reading file")
+        $log.info("in_kube_podinventory::merge_info : backtrace: #{error.backtrace}")
       end
 
-      puts "in_kube_podinventory::merge_info : before noticeHash loop, number of items in hash: #{@noticeHash.size()}, noticeHash: #{@noticeHash}"
+      $log.info("in_kube_podinventory::merge_info : before noticeHash loop, number of items in hash: #{@noticeHash.size()}, noticeHash: #{@noticeHash}")
 
-    uidList = []
+      uidList = []
 
-    @mutex.synchronize {
+      @mutex.synchronize {
         @noticeHash.each do |uid, record|
-            puts "in_kube_podinventory::merge_info : looping through noticeHash, type of notice: #{record["type"]}"
-            # puts "podHash looks like: #{@podHash}"
-            puts "notice uid: #{uid}"
-            puts "notice record: #{record}"
+          $log.info("in_kube_podinventory::merge_info : looping through noticeHash, type of notice: #{record["type"]}")
+          # $log.info("podHash looks like: #{@podHash}")
+          $log.info("merge_info :: notice uid: #{uid}")
+          $log.info("merge_info :: notice record: #{record}")
 
-            uidList.append(uid)
+          uidList.append(uid)
 
-            case record["type"]
-            when "ADDED"
+          case record["type"]
+          when "ADDED"
+            @podHash[uid] = record
+            $log.info("merge_info :: added")
+          when "MODIFIED"
+            $log.info("merge_info :: entered modified case as expected")
+            if @podHash[uid].nil?
+              $log.info("merge_info :: modify case where uid for add was overwritten to modify"  )
               @podHash[uid] = record
-              puts "added"
-            when "MODIFIED"
-              puts "entered modified case as expected"
-              if @podHash[uid].nil?
-                puts "modify case where uid for add was overwritten to modify"  
-                @podHash[uid] = record
-              else
-                puts "modify case where it is a legit modify"
-                val = @podHash[uid]
-                val["status"] = record["status"]
-                @podHash[uid] = val
-              end
-              puts "modified"
-            when "DELETED"
-              @podHash.delete(uid)
-              puts "deleted"
             else
-              puts "something went wrong"
+              $log.info("merge_info :: modify case where it is a legit modify")
+              val = @podHash[uid]
+              val["status"] = record["status"]
+              @podHash[uid] = val
             end
-            # puts "uid: #{uid} and record: #{record}"
-            puts "end of switch"
+            $log.info("merge_info :: modified")
+          when "DELETED"
+            @podHash.delete(uid)
+            $log.info("merge_info :: deleted")
+          else
+            $log.info("merge_info :: something went wrong")
+          end
+          # $log.info("uid: #{uid} and record: #{record}")
+          $log.info("merge_info :: end of switch")
         end
 
         # remove all looked at uids from the noticeHash
         uidList.each do |uid|
-            @noticeHash.delete(uid)
+          @noticeHash.delete(uid)
         end
       }
 
+      $log.info("in_kube_podinventory:: merge_info : about to replace entire contents of testing-podinventory.json")
       # replace entire contents of testing-podinventory.json
       File.open("testing-podinventory.json", "w") do |f|
           f.write JSON.pretty_generate(@podHash)
       end
+      $log.info("in_kube_podinventory:: merge_info : finished replacing contents of testing-podinventory.json")
     end
 
     def run_periodic
