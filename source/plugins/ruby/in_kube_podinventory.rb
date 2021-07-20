@@ -128,6 +128,10 @@ module Fluent::Plugin
       $log.info("in_kube_podinventory::watch - initial_write : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
       
       continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
+      if (continuationToken.nil? || continuationToken.empty?) 
+        $log.info("in_kube_podinventory::watch - initial_write : continuation token is null or empty rip")
+      end
+
       @collection_version = podInventory["metadata"]["resourceVersion"]
       
       $log.info("in_kube_podinventory::watch - initial_write : received collection version: #{@collection_version}")
@@ -171,26 +175,23 @@ module Fluent::Plugin
       $log.info("in_kube_podinventory::watch : finished getting pods, about to begin infinite loop for watch")
 
       loop do
-        $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods")
+        $log.info("in_kube_pod_inventory::watch: inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
           @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
-                $log.info("in_kube_podinventory::watch: received a notice, inside watch pods! Time: #{Time.now.utc.iso8601}")
-                # if !notice["object"].nil? && !notice["object"].empty?
-                #     $log.info("in_kube_podinventory::watch: received a notice of type #{notice["type"]}")
+            puts "in_kube_podinventory::watch : inside watch pods! Time: #{Time.now.utc.iso8601}"
+            if !notice.nil? && !notice.empty?
+              puts "in_kube_podinventory::watch : received a notice that is not null and not empty, type: #{notice["type"]}"
 
-                #     item = notice["object"]
-                #     record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
-                #     $log.info("in_kube_podinventory::watch: successfully created a record with notice")
+              item = notice["object"]
+              record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
 
-                #     # @mutex.synchronize {
-                #     $log.info("in_kube_podinventory::watch : about to add item to noticeHash. Time: #{Time.now.utc.iso8601}")
-                #     @noticeHash[item["metadata"]["uid"]] = record
-                #     $log.info("in_kube_podinventory::watch : successfully added item to noticeHash. Time: #{Time.now.utc.iso8601}")
-                #     # }
-                # else
-                #   $log.info("in_kube_pod_inventory::watch: notice object was either null or empty")
-                # end
+              @mutex.synchronize {
+                  @noticeHash[item["metadata"]["uid"]] = record
+              }
+
+              puts "watch pods:: number of items in noticeHash = #{@noticeHash.size}"
             end
+          end
         rescue => exception
             $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
             # $log.debug_backtrace(exception.backtrace)
@@ -481,6 +482,68 @@ module Fluent::Plugin
       end #begin block end
     end
 
+    def merge_info
+      begin
+        fileContents = File.read("testing-podinventory.json")
+        puts "in_kube_podinventory::merge_info : file contents read"
+        @podHash = JSON.parse(fileContents)
+        puts "in_kube_podinventory::merge_info : parse successful"
+      rescue => error
+          puts "in_kube_podinventory::merge_info : something went wrong with reading file"
+          puts "in_kube_podinventory::merge_info : backtrace: #{error.backtrace}"
+      end
+
+      puts "in_kube_podinventory::merge_info : before noticeHash loop, number of items in hash: #{@noticeHash.size()}, noticeHash: #{@noticeHash}"
+
+    uidList = []
+
+    @mutex.synchronize {
+        @noticeHash.each do |uid, record|
+            puts "in_kube_podinventory::merge_info : looping through noticeHash, type of notice: #{record["type"]}"
+            # puts "podHash looks like: #{@podHash}"
+            puts "notice uid: #{uid}"
+            puts "notice record: #{record}"
+
+            uidList.append(uid)
+
+            case record["type"]
+            when "ADDED"
+              @podHash[uid] = record
+              puts "added"
+            when "MODIFIED"
+              puts "entered modified case as expected"
+              if @podHash[uid].nil?
+                puts "modify case where uid for add was overwritten to modify"  
+                @podHash[uid] = record
+              else
+                puts "modify case where it is a legit modify"
+                val = @podHash[uid]
+                val["status"] = record["status"]
+                @podHash[uid] = val
+              end
+              puts "modified"
+            when "DELETED"
+              @podHash.delete(uid)
+              puts "deleted"
+            else
+              puts "something went wrong"
+            end
+            # puts "uid: #{uid} and record: #{record}"
+            puts "end of switch"
+        end
+
+        # remove all looked at uids from the noticeHash
+        uidList.each do |uid|
+            @noticeHash.delete(uid)
+        end
+      }
+
+      # replace entire contents of testing-podinventory.json
+      File.open("testing-podinventory.json", "w") do |f|
+          f.write JSON.pretty_generate(@podHash)
+      end
+    end
+
     def run_periodic
       @mutex.lock
       done = @finished
@@ -500,9 +563,10 @@ module Fluent::Plugin
         @mutex.unlock
         if !done
           begin
-            $log.info("in_kube_podinventory::run_periodic.enumerate.start #{Time.now.utc.iso8601}")
-            enumerate
-            $log.info("in_kube_podinventory::run_periodic.enumerate.end #{Time.now.utc.iso8601}")
+            $log.info("in_kube_podinventory::run_periodic.merge_info.start #{Time.now.utc.iso8601}")
+            # enumerate
+            merge_info
+            $log.info("in_kube_podinventory::run_periodic.merge_info.end #{Time.now.utc.iso8601}")
           rescue => errorStr
             $log.warn "in_kube_podinventory::run_periodic: enumerate Failed to retrieve pod inventory: #{errorStr}"
             ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
