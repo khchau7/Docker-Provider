@@ -113,7 +113,10 @@ module Fluent::Plugin
 
     def write_to_file(podInventory)
       $log.info("in_kube_podinventory:: write_to_file : inside write to file function")
-      File.write("testing-podinventory.json", JSON.pretty_generate(podInventory))
+      File.open("testing-podinventory.json", "w") { |file|
+        file.write(JSON.pretty_generate(podInventory))
+      }
+      # File.write("testing-podinventory.json", JSON.pretty_generate(podInventory))
       $log.info("in_kube_podinventory:: write_to_file : successfully done writing to file")
     end
 
@@ -487,6 +490,7 @@ module Fluent::Plugin
       begin
         fileContents = File.read("testing-podinventory.json")
         $log.info("in_kube_podinventory::merge_info : file contents read")
+        $log.info("in_kube_podinventory::merge_info : fileContents: #{fileContents}")
         @podHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_info : parse successful")
       rescue => error
@@ -541,9 +545,12 @@ module Fluent::Plugin
 
       $log.info("in_kube_podinventory:: merge_info : about to replace entire contents of testing-podinventory.json")
       # replace entire contents of testing-podinventory.json
-      File.open("testing-podinventory.json", "w") do |f|
-          f.write JSON.pretty_generate(@podHash)
-      end
+      File.open("testing-podinventory.json", "w") { |file|
+        file.write(JSON.pretty_generate(podInventory))
+      }
+      # File.open("testing-podinventory.json", "w") do |f|
+      #     f.write JSON.pretty_generate(@podHash)
+      # end
       $log.info("in_kube_podinventory:: merge_info : finished replacing contents of testing-podinventory.json")
     end
 
