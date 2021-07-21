@@ -113,9 +113,13 @@ module Fluent::Plugin
 
     def write_to_file(podInventory)
       $log.info("in_kube_podinventory:: write_to_file : inside write to file function")
-      File.open("testing-podinventory.json", "w") { |file|
-        file.write(JSON.pretty_generate(podInventory))
-      }
+      batchTime = Time.utc.iso8601
+      podInventory["items"].each do |item|
+        podInventoryRecords = getPodInventoryRecords(item, @serviceRecords, batchTime)
+        File.open("testing-podinventory.json", "w") { |file|
+          file.write(JSON.pretty_generate(podInventoryRecords))
+        }
+      end
       # File.write("testing-podinventory.json", JSON.pretty_generate(podInventory))
       $log.info("in_kube_podinventory:: write_to_file : successfully done writing to file")
     end
@@ -172,7 +176,7 @@ module Fluent::Plugin
 
     def watch
       $log.info("in_kube_podinventory::watch : entered watch function - about to call initial write")
-      initial_write
+      enumerate
 
       # $log.info("finished initial write to pod inventory file")
       $log.info("in_kube_podinventory::watch : finished getting pods, about to begin infinite loop for watch")
@@ -215,7 +219,7 @@ module Fluent::Plugin
         @controllerData = {}
         currentTime = Time.now
         batchTime = currentTime.utc.iso8601
-        serviceRecords = []
+        @serviceRecords = []
         @podInventoryE2EProcessingLatencyMs = 0
         podInventoryStartTime = (Time.now.to_f * 1000).to_i            
 
@@ -231,9 +235,9 @@ module Fluent::Plugin
           $log.info("in_kube_podinventory::enumerate:End:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
           serviceInfo = nil
           # service inventory records much smaller and fixed size compared to serviceList
-          serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
+          @serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
           # updating for telemetry
-          @serviceCount += serviceRecords.length
+          @serviceCount += @serviceRecords.length
           serviceList = nil
         end
 
@@ -245,26 +249,29 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
         @collection_version = podInventory["metadata"]["resourceVersion"]
-        @log.info("in_kube_podinventory::enumerate : received collection version: #{@collection_version}")
+        $log.info("in_kube_podinventory::enumerate : received collection version: #{@collection_version}")
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
         if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
           $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length}  from Kube API @ #{Time.now.utc.iso8601}")
-          parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
+          write_to_file(podInventory)
+          # parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
         else
           $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
         end
 
         #If we receive a continuation token, make calls, process and flush data until we have processed all data
         while (!continuationToken.nil? && !continuationToken.empty?)
+          $log.info("in_kube_podinventory::enumerate : continuation token is not null and not empty")
           podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
           continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}&continue=#{continuationToken}")
           podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
           @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
           if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
             $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-            parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
+            write_to_file(podInventory)
+            # parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
           else
             $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
           end
@@ -273,7 +280,7 @@ module Fluent::Plugin
         @podInventoryE2EProcessingLatencyMs = ((Time.now.to_f * 1000).to_i - podInventoryStartTime)
         # Setting these to nil so that we dont hold memory until GC kicks in
         podInventory = nil
-        serviceRecords = nil
+        @serviceRecords = nil
 
         # Adding telemetry to send pod telemetry every 5 minutes
         timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
@@ -489,8 +496,8 @@ module Fluent::Plugin
       $log.info("merge_info:: enters this function, about to begin read file")
       begin
         fileContents = File.read("testing-podinventory.json")
-        $log.info("in_kube_podinventory::merge_info : file contents read")
-        $log.info("in_kube_podinventory::merge_info : fileContents: #{fileContents}")
+        # $log.info("in_kube_podinventory::merge_info : file contents read")
+        $log.info("in_kube_podinventory::merge_info : file contents read, fileContents: #{fileContents}")
         @podHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_info : parse successful")
       rescue => error
@@ -544,10 +551,11 @@ module Fluent::Plugin
       }
 
       $log.info("in_kube_podinventory:: merge_info : about to replace entire contents of testing-podinventory.json")
+      write_to_file(@podHash)
       # replace entire contents of testing-podinventory.json
-      File.open("testing-podinventory.json", "w") { |file|
-        file.write(JSON.pretty_generate(podInventory))
-      }
+      # File.open("testing-podinventory.json", "w") { |file|
+      #   file.write(JSON.pretty_generate(@podHash))
+      # }
       # File.open("testing-podinventory.json", "w") do |f|
       #     f.write JSON.pretty_generate(@podHash)
       # end
