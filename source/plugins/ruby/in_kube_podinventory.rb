@@ -120,9 +120,15 @@ module Fluent::Plugin
       begin
         podInventory["items"].each do |item|
           podInventoryRecords = getPodInventoryRecords(item, servRecords, batchTime)
+          podInventoryHash = {}
+          podInventoryRecords.each { |record|
+            uid = record["PodUid"]
+            podInventoryHash[uid] = record
+          }
+          $log.info("write_to_file:: pod inventory hash: #{podInventoryHash}")
           File.open("testing-podinventory.json", "w") { |file|
             $log.info("write_to_file:: makes it inside the file open just about to write pod inventory records")
-            file.write(JSON.pretty_generate(podInventoryRecords))
+            file.write(JSON.pretty_generate(podInventoryHash))
           }
         end
         $log.info("in_kube_podinventory:: write_to_file : successfully finished writing to file")
@@ -132,6 +138,103 @@ module Fluent::Plugin
         $log.info("write_to_file:: failed. podInventory items: #{podInventory["items"]}")
       end
     end 
+
+    def getNoticeRecord(notice)
+      record = {}
+      item = notice["object"]
+      #TODO: check assumption that batch time can be current time (CollectionTime)
+      batchTime = Time.now.utc.iso8601
+  
+      begin
+        record["CollectionTime"] = batchTime
+        record["Name"] = item["metadata"]["name"]
+        podNameSpace = item["metadata"]["namespace"]
+        #TODO: change uid later, handle case of horizontal scaling of pods but no controller (explained in getPodUid in KubenetesApiClient)
+        podUid = item["metadata"]["uid"]
+
+        nodeName = ""
+        # For unscheduled (non-started) pods nodeName does NOT exist
+        if !item["spec"]["nodeName"].nil?
+          nodeName = item["spec"]["nodeName"]
+        end
+
+        record["PodUid"] = podUid
+        record["PodLabel"] = [item["metadata"]["labels"]]
+        record["Namespace"] = podNameSpace
+        record["PodCreationTimeStamp"] = item["metadata"]["creationTimestamp"]
+
+        if !item["status"]["startTime"].nil?
+          record["PodStartTime"] = item["status"]["startTime"]
+        else
+          record["PodStartTime"] = ""
+        end
+
+        #podStatus
+        # NodeLost scenario -- pod(s) in the lost node is still being reported as running
+        podReadyCondition = true
+        if !item["status"]["reason"].nil? && item["status"]["reason"] == "NodeLost" && !item["status"]["conditions"].nil?
+          item["status"]["conditions"].each do |condition|
+            if condition["type"] == "Ready" && condition["status"] == "False"
+              podReadyCondition = false
+              break
+            end
+          end
+        end
+        if podReadyCondition == false
+          record["PodStatus"] = "Unknown"
+        elsif !item["metadata"]["deletionTimestamp"].nil? && !item["metadata"]["deletionTimestamp"].empty?
+          record["PodStatus"] = Constants::POD_STATUS_TERMINATING
+        else
+          record["PodStatus"] = item["status"]["phase"]
+        end
+
+        # For unscheduled (non-started) pods podIP does NOT exist
+        if !item["status"]["podIP"].nil?
+          record["PodIp"] = item["status"]["podIP"]
+        else
+          record["PodIp"] = ""
+        end
+
+        record["Computer"] = nodeName
+        #TODO: replace w KubernetesApiClient.getClusterId in agent code
+        record["ClusterId"] = ""
+        #TODO: replace w KubernetesApiClient.getClusterName in agent code
+        record["ClusterName"] = ""
+        #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
+        record["ServiceName"] = ""
+
+        if !item["metadata"]["ownerReferences"].nil?
+          record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
+          record["ControllerName"] = item["metadata"]["ownerReferences"][0]["name"]
+          # @controllerSet.add(record["ControllerKind"] + record["ControllerName"])
+          # Adding controller kind to telemetry ro information about customer workload
+          # if (@controllerData[record["ControllerKind"]].nil?)
+          #   @controllerData[record["ControllerKind"]] = 1
+          # else
+          #   controllerValue = @controllerData[record["ControllerKind"]]
+          #   @controllerData[record["ControllerKind"]] += 1
+          # end
+        end
+
+        podRestartCount = 0
+        record["PodRestartCount"] = 0
+
+        #TODO: popular real values for container fields
+        record["ContainerID"] = ""
+        record["ContainerName"] = ""
+        record["ContainerRestartCount"] = 0
+        record["ContainerRestartReason"] = ""
+        record["ContainerStatus"] = ""
+        record["ContainerCreationTimeStamp"] = Time.now.utc.iso8601
+        record["ContainerLastStatus"] = Hash.new
+
+        record["NoticeType"] = notice["type"]
+      
+      rescue => exception
+        puts "getNoticeRecord failed: #{exception.backtrace}"
+      end
+      return record
+    end
 
     def watch
       $log.info("in_kube_podinventory::watch : enters watch function - about to call enumerate")
@@ -148,7 +251,9 @@ module Fluent::Plugin
               $log.info("in_kube_podinventory::watch : received a notice that is not null and not empty, type: #{notice["type"]}")
 
               item = notice["object"]
-              record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]}
+              record = getNoticeRecord(notice)
+              # record = {"name" => item["metadata"]["name"], "uid" => item["metadata"]["uid"], "status" => item["status"]["phase"], "type" => notice["type"]
+              $log.info("in_kube_podinventory::watch : constructed record: #{record}")
 
               @mutex.synchronize {
                   @noticeHash[item["metadata"]["uid"]] = record
@@ -457,7 +562,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::merge_info : file contents read, fileContents: #{fileContents}")
         @podHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_info : parse successful, received podHash")
-        $log.info("in_kube_podinventory::merge_info : podHash: #{podHash}")        
+        $log.info("in_kube_podinventory::merge_info : podHash: #{@podHash}")        
       rescue => error
         $log.info("in_kube_podinventory::merge_info : something went wrong with reading file")
         $log.info("in_kube_podinventory::merge_info : reading file failed. backtrace: #{error.backtrace}")
@@ -469,14 +574,14 @@ module Fluent::Plugin
 
       @mutex.synchronize {
         @noticeHash.each do |uid, record|
-          $log.info("in_kube_podinventory::merge_info : looping through noticeHash, type of notice: #{record["type"]}")
+          $log.info("in_kube_podinventory::merge_info : looping through noticeHash, type of notice: #{record["NoticeType"]}")
           # $log.info("podHash looks like: #{@podHash}")
           $log.info("in_kube_podinventory::merge_info :: notice uid: #{uid}")
           $log.info("in_kube_podinventory::merge_info :: notice record: #{record}")
 
           uidList.append(uid)
 
-          case record["type"]
+          case record["NoticeType"]
           when "ADDED"
             @podHash[uid] = record
             $log.info("in_kube_podinventory::merge_info :: added to podhash")
@@ -486,9 +591,9 @@ module Fluent::Plugin
               $log.info("in_kube_podinventory::merge_info :: modify case where uid for add was overwritten to modify"  )
               @podHash[uid] = record
             else
-              $log.info("in_kube_podinventory::merge_info :: modify case where it is a legit modify")
+              $log.info("in_kube_podinventory::merge_info :: modify case where it is a legit modify. new status is #{record["PodStatus"]}")
               val = @podHash[uid]
-              val["status"] = record["status"]
+              val["PodStatus"] = record["PodStatus"]
               @podHash[uid] = val
             end
             $log.info("in_kube_podinventory::merge_info :: modified and changes reflected in podHash")
@@ -512,19 +617,11 @@ module Fluent::Plugin
       $log.info("in_kube_podinventory:: merge_info : about to replace entire contents of testing-podinventory.json")
       if (!@podHash.nil? && !@podHash.empty?)
         $log.info("in_kube_podinventory:: merge_info : podHash not null and not empty, will write to file")
-        # write_to_file(@podHash)
+        write_to_file(@podHash)
       else
         $log.info("in_kube_podinventory:: merge_info : podHash was either null or empty, so NOT writing to file - should never be in this case")
       end
 
-      # write_to_file(@podHash)
-      # replace entire contents of testing-podinventory.json
-      # File.open("testing-podinventory.json", "w") { |file|
-      #   file.write(JSON.pretty_generate(@podHash))
-      # }
-      # File.open("testing-podinventory.json", "w") do |f|
-      #     f.write JSON.pretty_generate(@podHash)
-      # end
       $log.info("in_kube_podinventory:: merge_info : finished replacing contents of testing-podinventory.json")
     end
 
