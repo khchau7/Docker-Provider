@@ -22,6 +22,7 @@ module Fluent::Plugin
       require "set"
       require "time"
       require "kubeclient"
+      require "mmap/mmap"
 
       require_relative "kubernetes_container_inventory"
       require_relative "KubernetesApiClient"
@@ -44,6 +45,7 @@ module Fluent::Plugin
       @podsAPIE2ELatencyMs = 0    
 
       @noticeHash = {}
+      @useMmap = false
       
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
@@ -78,6 +80,13 @@ module Fluent::Plugin
           $log.warn("in_kube_podinventory::start: setting to default value since got PODS_EMIT_STREAM_BATCH_SIZE nil or empty")
           @PODS_EMIT_STREAM_BATCH_SIZE = 200
         end
+
+        if ENV["USEMMAP"]
+          @useMmap = true
+        end
+
+        $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
+        
         # create kubernetes watch client
         ssl_options = {
           ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
@@ -125,11 +134,19 @@ module Fluent::Plugin
             uid = record["PodUid"]
             podInventoryHash[uid] = record
           }
-          $log.info("write_to_file:: pod inventory hash: #{podInventoryHash}")
-          File.open("testing-podinventory.json", "w") { |file|
-            $log.info("write_to_file:: makes it inside the file open just about to write pod inventory records")
-            file.write(JSON.pretty_generate(podInventoryHash))
-          }
+
+          if @useMmap
+            $log.info("mmap file write_to_file:: pod inventory hash: #{podInventoryHash}")
+            File.new("testing-podinventory.json", "w")
+            @mmap = Mmap.new("testing-podinventory.json", "rw")
+            @mmap << JSON.pretty_generate(podInventoryHash)
+          else
+            $log.info("regular file write_to_file:: pod inventory hash: #{podInventoryHash}")
+            File.open("testing-podinventory.json", "w") { |file|
+              $log.info("write_to_file:: makes it inside the file open just about to write pod inventory records")
+              file.write(JSON.pretty_generate(podInventoryHash))
+            }
+          end
         end
         $log.info("in_kube_podinventory:: write_to_file : successfully finished writing to file")
       rescue => exception
@@ -558,7 +575,12 @@ module Fluent::Plugin
     def merge_info
       $log.info("in_kube_podinventory::merge_info : enters merge_info function, about to begin read file")
       begin
-        fileContents = File.read("testing-podinventory.json")
+        fileContents = ""
+        if @useMmap
+          fileContents << @mmap
+        else
+          fileContents = File.read("testing-podinventory.json")
+        end
         $log.info("in_kube_podinventory::merge_info : file contents read, fileContents: #{fileContents}")
         @podHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_info : parse successful, received podHash")

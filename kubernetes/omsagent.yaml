@@ -400,6 +400,8 @@ spec:
               value: ""
             - name: AZMON_CONTAINERLOGS_ONEAGENT_REGIONS
               value: "koreacentral,norwayeast,eastus2"
+            - name: USEMMAP
+              value: false
           securityContext:
             privileged: true
           ports:
