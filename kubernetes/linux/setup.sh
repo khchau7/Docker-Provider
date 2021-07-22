@@ -55,7 +55,8 @@ gem install gyoku iso8601 --no-doc
 # kubeclient gem
 sudo apt-get install libmagickwand-dev -y
 sudo gem install kubeclient --no-document
-
+# mmap2 gem
+sudo gem install mmap2
 
 rm -f $TMPDIR/docker-cimprov*.sh
 rm -f $TMPDIR/azure-mdsd*.deb
