@@ -81,7 +81,7 @@ module Fluent::Plugin
           @PODS_EMIT_STREAM_BATCH_SIZE = 200
         end
 
-        if ENV["USEMMAP"]
+        if (!ENV["USEMMAP"].nil? && !ENV["USEMMAP"].empty? && ENV["USEMMAP"].casecmp("true") == 0)
           @useMmap = true
         end
 
