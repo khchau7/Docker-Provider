@@ -126,7 +126,7 @@ module Fluent::Plugin
       servRecords= @serviceRecords
       
       podInventoryHash = {}
-      
+
       begin
         if !podInventory["items"].nil? && !podInventory["items"].empty?
           podInventory["items"].each do |item|
@@ -154,7 +154,7 @@ module Fluent::Plugin
             file.write(JSON.pretty_generate(podInventoryHash))
           }
         end
-        # $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
+        $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
       rescue => exception
         $log.info("in_kube_podinventory::write_to_file : writing to file failed. backtrace: #{exception.backtrace}")
         $log.info("write_to_file:: failed. podInventory: #{podInventory}")
@@ -269,7 +269,7 @@ module Fluent::Plugin
         $log.info("in_kube_pod_inventory::watch : inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
           @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
-            $log.info("in_kube_podinventory::watch : inside watch pods! current time: #{Time.now.utc.iso8601}. notice: #{JSON.pretty_generate(notice)}")
+            $log.info("in_kube_podinventory::watch : inside watch pods! current time: #{Time.now.utc.iso8601}.")
             if !notice.nil? && !notice.empty?
               $log.info("in_kube_podinventory::watch : received a notice that is not null and not empty. notice type: #{notice["type"]}")
 
@@ -704,20 +704,23 @@ module Fluent::Plugin
         else
           fileContents = File.read("testing-podinventory.json")
         end
+        $log.info("in_kube_podinventory::merge_updates : file contents read")
         # $log.info("in_kube_podinventory::merge_updates : file contents read, fileContents: #{fileContents}")
         @podInventoryHash = JSON.parse(fileContents)
-        $log.info("in_kube_podinventory::merge_updates : parse successful, received podInventoryHash: #{podInventoryHash}")
+        $log.info("in_kube_podinventory::merge_updates : parse successful")
+        # $log.info("in_kube_podinventory::merge_updates : parse successful, received podInventoryHash: #{@podInventoryHash}")
       rescue => error
         $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error.backtrace}")
+        $log.info("in_kube_podinventory::merge_updates : Reading error: podInventoryHash: #{@podInventoryHash}")
       end
 
-      $log.info("in_kube_podinventory::merge_updates : before noticeHash loop, number of items in hash: #{@noticeHash.size()}, noticeHash: #{@noticeHash}")
+      $log.info("in_kube_podinventory::merge_updates : before noticeHash loop, number of items in hash: #{@noticeHash.size()}")
 
       uidList = []
 
       @mutex.synchronize {
         @noticeHash.each do |uid, record|
-          $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}. notice uid: #{uid}. notice record: #{record}")
+          $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
 
           uidList.append(uid)
 
