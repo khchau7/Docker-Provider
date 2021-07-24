@@ -125,28 +125,34 @@ module Fluent::Plugin
       #TODO: check if you can pass @serviceRecords into getPodInventoryRecords rather than creating a local copy
       servRecords= @serviceRecords
       
+      podInventoryHash = {}
+      
       begin
-        podInventory["items"].each do |item|
-          # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record
-          podInventoryRecords = getPodInventoryRecords(item, servRecords, batchTime)
-          podInventoryHash = {}
-          podInventoryRecords.each { |record|
-            uid = record["PodUid"]
-            podInventoryHash[uid] = record
-          }
-
-          # Write to mmap or regular file based on value of @useMmap flag
-          if @useMmap
-            $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-            File.new("testing-podinventory.json", "w")
-            @mmap = Mmap.new("testing-podinventory.json", "rw")
-            @mmap << JSON.pretty_generate(podInventoryHash)
-          else
-            $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
-            File.open("testing-podinventory.json", "w") { |file|
-              file.write(JSON.pretty_generate(podInventoryHash))
+        if !podInventory["items"].nil? && !podInventory["items"].empty?
+          podInventory["items"].each do |item|
+            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record
+            podInventoryRecords = getPodInventoryRecords(item, servRecords, batchTime)
+            podInventoryRecords.each { |record|
+              uid = record["PodUid"]
+              podInventoryHash[uid] = record
             }
           end
+        else
+          podInventoryHash = podInventory
+        end
+
+
+        # Write to mmap or regular file based on value of @useMmap flag
+        if @useMmap
+          $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
+          File.new("testing-podinventory.json", "w")
+          @mmap = Mmap.new("testing-podinventory.json", "rw")
+          @mmap << JSON.pretty_generate(podInventoryHash)
+        else
+          $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
+          File.open("testing-podinventory.json", "w") { |file|
+            file.write(JSON.pretty_generate(podInventoryHash))
+          }
         end
         # $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
       rescue => exception
@@ -215,9 +221,9 @@ module Fluent::Plugin
 
         record["Computer"] = nodeName
         #TODO: replace w KubernetesApiClient.getClusterId in agent code
-        record["ClusterId"] = ""
+        record["ClusterId"] = KubernetesApiClient.getClusterId
         #TODO: replace w KubernetesApiClient.getClusterName in agent code
-        record["ClusterName"] = ""
+        record["ClusterName"] = KubernetesApiClient.getClusterName
         #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
         record["ServiceName"] = ""
 
@@ -681,7 +687,7 @@ module Fluent::Plugin
         end
 
         #Updating value for AppInsights telemetry
-        @podCount += podInventory["items"].length
+        # @podCount += podInventory["items"].length
       rescue => errorStr
         $log.warn "Failed in parse_and_emit_merge_updates pod inventory: #{errorStr}"
         $log.debug_backtrace(errorStr.backtrace)
