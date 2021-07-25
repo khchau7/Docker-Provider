@@ -144,13 +144,19 @@ module Fluent::Plugin
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-          File.new("testing-podinventory.json", "w")
+          File.new("testing-podinventory.json", "rw")
           @mmap = Mmap.new("testing-podinventory.json", "rw")
           @mmap << JSON.pretty_generate(@podInventoryHash)
 
           sanityCheck = ""
           sanityCheck << @mmap
-          $log.info("write_to_file:: sanity check: #{sanityCheck}")
+
+          if sanityCheck.empty?
+            $log.info("write_to_file:: sanity check was empty")
+          else
+            $log.info("write_to_file:: sanity check was NOT empty -- good")
+          end
+          # $log.info("write_to_file:: sanity check: #{sanityCheck}")
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("testing-podinventory.json", "w") { |file|
