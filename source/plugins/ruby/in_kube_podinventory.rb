@@ -46,6 +46,7 @@ module Fluent::Plugin
 
       @noticeHash = {}
       @useMmap = false
+      @podInventoryHash = {}
       
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
@@ -124,8 +125,6 @@ module Fluent::Plugin
       batchTime = Time.now.utc.iso8601
       #TODO: check if you can pass @serviceRecords into getPodInventoryRecords rather than creating a local copy
       servRecords= @serviceRecords
-      
-      podInventoryHash = {}
 
       begin
         if !podInventory["items"].nil? && !podInventory["items"].empty?
@@ -134,11 +133,11 @@ module Fluent::Plugin
             podInventoryRecords = getPodInventoryRecords(item, servRecords, batchTime)
             podInventoryRecords.each { |record|
               uid = record["PodUid"]
-              podInventoryHash[uid] = record
+              @podInventoryHash[uid] = record
             }
           end
         else
-          podInventoryHash = podInventory
+          @podInventoryHash = podInventory
         end
 
 
@@ -147,11 +146,15 @@ module Fluent::Plugin
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
           File.new("testing-podinventory.json", "w")
           @mmap = Mmap.new("testing-podinventory.json", "rw")
-          @mmap << JSON.pretty_generate(podInventoryHash)
+          @mmap << JSON.pretty_generate(@podInventoryHash)
+
+          sanityCheck = ""
+          sanityCheck << @mmap
+          $log.info("write_to_file:: sanity check: #{sanityCheck}")
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("testing-podinventory.json", "w") { |file|
-            file.write(JSON.pretty_generate(podInventoryHash))
+            file.write(JSON.pretty_generate(@podInventoryHash))
           }
         end
         $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
@@ -701,6 +704,7 @@ module Fluent::Plugin
         # Read file
         if @useMmap
           fileContents << @mmap
+          $log.info("merge_updates : sanity check : fileContents = #{fileContents}")
         else
           fileContents = File.read("testing-podinventory.json")
         end
