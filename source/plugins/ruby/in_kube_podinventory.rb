@@ -156,7 +156,12 @@ module Fluent::Plugin
           # @mmap << JSON.pretty_generate(@podInventoryHash).to_s
           @mmap << @podInventoryHash.to_s
 
+          $log.info("write_to_file:: trying to use sanity check to read files")
           sanityCheck = ""
+          if @mmap.empty?
+            $log.info("write_to_file :: sanity check - mmap seems to be empty for some reason")
+          end
+          sanityCheck = sanityCheck.dup? if sanityCheck.frozen?
           sanityCheck << @mmap
 
           if sanityCheck.empty?
@@ -174,6 +179,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
       rescue => exception
         $log.info("in_kube_podinventory::write_to_file : writing to file failed. backtrace: #{exception.backtrace}")
+        $log.info("write_to_file:: writing failed: #{exception}")
         # $log.info("write_to_file:: failed. podInventory: #{podInventory}")
         # $log.info("write_to_file:: failed. podInventory items: #{podInventory["items"]}")
       end
@@ -717,6 +723,7 @@ module Fluent::Plugin
         fileContents = ""
         # Read file
         if @useMmap
+          fileContents = fileContents.dup if fileContents.frozen?
           fileContents << @mmap
           # $log.info("merge_updates : sanity check : fileContents = #{fileContents}")
         else
@@ -728,7 +735,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::merge_updates : parse successful")
         # $log.info("in_kube_podinventory::merge_updates : parse successful, received podInventoryHash: #{@podInventoryHash}")
       rescue => error
-        $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error.backtrace}")
+        $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error}: #{error.backtrace}")
         # $log.info("in_kube_podinventory::merge_updates : Reading error: podInventoryHash: #{@podInventoryHash}")
       end
 
