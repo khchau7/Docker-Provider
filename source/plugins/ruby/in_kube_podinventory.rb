@@ -157,7 +157,7 @@ module Fluent::Plugin
           @mmap << @podInventoryHash.to_json
 
           $log.info("write_to_file:: trying to use sanity check to read files")
-          sanityCheck = ""
+          sanityCheck = "" 
           if @mmap.empty?
             $log.info("write_to_file :: sanity check - mmap seems to be empty for some reason")
           end
@@ -731,7 +731,10 @@ module Fluent::Plugin
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
         # $log.info("in_kube_podinventory::merge_updates : file contents read, fileContents: #{fileContents}")
-        @podInventoryHash = JSON.parse(fileContents)
+        # use Yajl Parser
+        $log.info("merge_updates:: using yajl parser")
+        @podInventoryHash = Yajl::Parser.parse(fileContents)
+        # @podInventoryHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_updates : parse successful")
         # $log.info("in_kube_podinventory::merge_updates : parse successful, received podInventoryHash: #{@podInventoryHash}")
       rescue => error
