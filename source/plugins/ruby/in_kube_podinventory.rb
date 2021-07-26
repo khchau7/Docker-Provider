@@ -153,7 +153,8 @@ module Fluent::Plugin
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
           # File.new("testing-podinventory.json", "rw")
           # @mmap = Mmap.new("testing-podinventory.json", "rw")
-          @mmap << JSON.pretty_generate(@podInventoryHash)
+          # @mmap << JSON.pretty_generate(@podInventoryHash).to_s
+          @mmap << @podInventoryHash.to_s
 
           sanityCheck = ""
           sanityCheck << @mmap
