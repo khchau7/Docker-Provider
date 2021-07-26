@@ -154,14 +154,14 @@ module Fluent::Plugin
           # File.new("testing-podinventory.json", "rw")
           # @mmap = Mmap.new("testing-podinventory.json", "rw")
           # @mmap << JSON.pretty_generate(@podInventoryHash).to_s
-          @mmap << @podInventoryHash.to_s
+          @mmap << @podInventoryHash.to_json
 
           $log.info("write_to_file:: trying to use sanity check to read files")
           sanityCheck = ""
           if @mmap.empty?
             $log.info("write_to_file :: sanity check - mmap seems to be empty for some reason")
           end
-          sanityCheck = sanityCheck.dup? if sanityCheck.frozen?
+          sanityCheck = sanityCheck.dup if sanityCheck.frozen?
           sanityCheck << @mmap
 
           if sanityCheck.empty?
