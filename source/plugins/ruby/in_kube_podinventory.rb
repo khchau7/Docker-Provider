@@ -147,41 +147,21 @@ module Fluent::Plugin
           @podInventoryHash = podInventory
         end
 
-
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-          # File.new("testing-podinventory.json", "rw")
-          # @mmap = Mmap.new("testing-podinventory.json", "rw")
-          # @mmap << JSON.pretty_generate(@podInventoryHash).to_s
-          @mmap << @podInventoryHash.to_json
-
-          $log.info("write_to_file:: trying to use sanity check to read files")
-          sanityCheck = "" 
-          if @mmap.empty?
-            $log.info("write_to_file :: sanity check - mmap seems to be empty for some reason")
-          end
-          sanityCheck = sanityCheck.dup if sanityCheck.frozen?
-          sanityCheck << @mmap
-
-          if sanityCheck.empty?
-            $log.info("write_to_file:: sanity check was empty")
-          else
-            $log.info("write_to_file:: sanity check was NOT empty -- good")
-          end
-          # $log.info("write_to_file:: sanity check: #{sanityCheck}")
+          @mmap << JSON.pretty_generate(@podInventoryHash).to_s
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("testing-podinventory.json", "w") { |file|
             file.write(JSON.pretty_generate(@podInventoryHash))
           }
         end
+
         $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
+        $log.info("in_kube_podinventory::write_to_file : size of written file = #{File.size("testing-podinventory.json") / 1000000.0}")
       rescue => exception
-        $log.info("in_kube_podinventory::write_to_file : writing to file failed. backtrace: #{exception.backtrace}")
-        $log.info("write_to_file:: writing failed: #{exception}")
-        # $log.info("write_to_file:: failed. podInventory: #{podInventory}")
-        # $log.info("write_to_file:: failed. podInventory items: #{podInventory["items"]}")
+        $log.info("in_kube_podinventory::write_to_file : writing to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
       end
     end 
 
@@ -725,21 +705,15 @@ module Fluent::Plugin
         if @useMmap
           fileContents = fileContents.dup if fileContents.frozen?
           fileContents << @mmap
-          # $log.info("merge_updates : sanity check : fileContents = #{fileContents}")
         else
           fileContents = File.read("testing-podinventory.json")
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
-        # $log.info("in_kube_podinventory::merge_updates : file contents read, fileContents: #{fileContents}")
-        # use Yajl Parser
-        $log.info("merge_updates:: using yajl parser")
         @podInventoryHash = Yajl::Parser.parse(fileContents)
         # @podInventoryHash = JSON.parse(fileContents)
         $log.info("in_kube_podinventory::merge_updates : parse successful")
-        # $log.info("in_kube_podinventory::merge_updates : parse successful, received podInventoryHash: #{@podInventoryHash}")
       rescue => error
         $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error}: #{error.backtrace}")
-        # $log.info("in_kube_podinventory::merge_updates : Reading error: podInventoryHash: #{@podInventoryHash}")
       end
 
       $log.info("in_kube_podinventory::merge_updates : before noticeHash loop, number of items in hash: #{@noticeHash.size()}")
