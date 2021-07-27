@@ -87,9 +87,9 @@ module Fluent::Plugin
         end
 
         #TODO: assumption made regarding mode of new file - might mess up regular file case
-        File.new("testing-podinventory.json", "w")
+        # File.new("testing-podinventory.json", "w")
         if @useMmap
-          @mmap = Mmap.new("testing-podinventory.json", "rw")
+          @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
         end
 
         $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
@@ -153,13 +153,13 @@ module Fluent::Plugin
           @mmap << JSON.pretty_generate(@podInventoryHash).to_s
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
-          File.open("testing-podinventory.json", "w") { |file|
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
             file.write(JSON.pretty_generate(@podInventoryHash))
           }
         end
 
         $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
-        $log.info("in_kube_podinventory::write_to_file : size of written file = #{File.size("testing-podinventory.json") / 1000000.0}")
+        $log.info("in_kube_podinventory::write_to_file : size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0}")
       rescue => exception
         $log.info("in_kube_podinventory::write_to_file : writing to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
       end
@@ -706,7 +706,7 @@ module Fluent::Plugin
           fileContents = fileContents.dup if fileContents.frozen?
           fileContents << @mmap
         else
-          fileContents = File.read("testing-podinventory.json")
+          fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
         @podInventoryHash = Yajl::Parser.parse(fileContents)
@@ -761,7 +761,9 @@ module Fluent::Plugin
       $log.info("in_kube_podinventory:: merge_updates : about to replace entire contents of testing-podinventory.json")
       if (!@podInventoryHash.nil? && !@podInventoryHash.empty?)
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty, will write to file")
+        # only write if there is a change
         write_to_file(@podInventoryHash)
+
         parse_and_emit_merge_updates(@podInventoryHash)
       else
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash was either null or empty, so NOT writing to file - should never be in this case")
