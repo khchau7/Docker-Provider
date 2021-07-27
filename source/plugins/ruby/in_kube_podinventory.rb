@@ -745,7 +745,7 @@ module Fluent::Plugin
             @podInventoryHash.delete(uid)
             $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
           else
-            $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch")
+            $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
           end
           # $log.info("in_kube_podinventory::merge_updates :: end of switch")
         end
