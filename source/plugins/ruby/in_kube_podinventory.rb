@@ -150,11 +150,11 @@ module Fluent::Plugin
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-          @mmap << JSON.pretty_generate(@podInventoryHash).to_s
+          @mmap << JSON.pretty_generate(@podInventoryHash.to_json).to_s
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
-            file.write(JSON.pretty_generate(@podInventoryHash))
+            file.write(JSON.pretty_generate(@podInventoryHash.to_json))
           }
         end
 
@@ -405,6 +405,7 @@ module Fluent::Plugin
     end
 
     def parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime = Time.utc.iso8601)
+      $log.info("parse_and_emit_records:: podInventory: #{podInventory}")
       currentTime = Time.now   
       emitTime = Fluent::Engine.now  
       #batchTime = currentTime.utc.iso8601
@@ -582,6 +583,8 @@ module Fluent::Plugin
     end
 
     def parse_and_emit_merge_updates(podInventoryRecords)
+      $log.info("parse_and_emit_merge_updates:: podInventory: #{podInventoryRecords}")
+
       currentTime = Time.now   
       emitTime = Fluent::Engine.now  
       batchTime = currentTime.utc.iso8601
