@@ -152,7 +152,8 @@ module Fluent::Plugin
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : creating new mmap file.")
-          File.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
+          # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
           @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
 
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
