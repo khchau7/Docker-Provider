@@ -405,7 +405,7 @@ module Fluent::Plugin
     end
 
     def parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime = Time.utc.iso8601)
-      $log.info("parse_and_emit_records:: podInventory: #{podInventory}")
+      # $log.info("parse_and_emit_records:: podInventory: #{podInventory}")
       currentTime = Time.now   
       emitTime = Fluent::Engine.now  
       #batchTime = currentTime.utc.iso8601
@@ -583,7 +583,7 @@ module Fluent::Plugin
     end
 
     def parse_and_emit_merge_updates(podInventoryRecords)
-      $log.info("parse_and_emit_merge_updates:: podInventory: #{podInventoryRecords}")
+      # $log.info("parse_and_emit_merge_updates:: podInventory: #{podInventoryRecords}")
 
       currentTime = Time.now   
       emitTime = Fluent::Engine.now  
@@ -624,76 +624,6 @@ module Fluent::Plugin
           end
           eventStream = nil
         end
-
-        if containerInventoryStream.count > 0
-          $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of windows container inventory records emitted #{containerInventoryStream.count} @ #{Time.now.utc.iso8601}")
-          router.emit_stream(@containerInventoryTag, containerInventoryStream) if containerInventoryStream
-          if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
-            $log.info("kubeWindowsContainerInventoryEmitStreamSuccess @ #{Time.now.utc.iso8601}")
-          end
-          containerInventoryStream = nil
-        end
-
-        if kubePerfEventStream.count > 0
-          $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of perf records emitted #{kubePerfEventStream.count} @ #{Time.now.utc.iso8601}")
-          router.emit_stream(@kubeperfTag, kubePerfEventStream) if kubePerfEventStream
-          kubePerfEventStream = nil
-          if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
-            $log.info("kubeContainerPerfEventEmitStreamSuccess @ #{Time.now.utc.iso8601}")
-          end
-        end
-
-        if insightsMetricsEventStream.count > 0
-          $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of insights metrics records emitted #{insightsMetricsEventStream.count} @ #{Time.now.utc.iso8601}")
-          router.emit_stream(@insightsMetricsTag, insightsMetricsEventStream) if insightsMetricsEventStream
-          if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
-            $log.info("kubePodInsightsMetricsEmitStreamSuccess @ #{Time.now.utc.iso8601}")
-          end
-          insightsMetricsEventStream = nil
-        end
-
-        if continuationToken.nil? #no more chunks in this batch to be sent, get all mdm pod inventory records to send
-          @log.info "Sending pod inventory mdm records to out_mdm"
-          pod_inventory_mdm_records = @inventoryToMdmConvertor.get_pod_inventory_mdm_records(batchTime)
-          @log.info "pod_inventory_mdm_records.size #{pod_inventory_mdm_records.size}"
-          mdm_pod_inventory_es = Fluent::MultiEventStream.new
-          pod_inventory_mdm_records.each { |pod_inventory_mdm_record|
-            mdm_pod_inventory_es.add(batchTime, pod_inventory_mdm_record) if pod_inventory_mdm_record
-          } if pod_inventory_mdm_records
-          router.emit_stream(@@MDMKubePodInventoryTag, mdm_pod_inventory_es) if mdm_pod_inventory_es
-        end
-
-        if continuationToken.nil? # sending kube services inventory records
-          kubeServicesEventStream = Fluent::MultiEventStream.new
-          # serviceRecords.each do |kubeServiceRecord|
-          #   if !kubeServiceRecord.nil?
-          #     # adding before emit to reduce memory foot print
-          #     kubeServiceRecord["ClusterId"] = KubernetesApiClient.getClusterId
-          #     kubeServiceRecord["ClusterName"] = KubernetesApiClient.getClusterName              
-          #     kubeServicesEventStream.add(emitTime, kubeServiceRecord) if kubeServiceRecord
-          #     if @PODS_EMIT_STREAM_BATCH_SIZE > 0 && kubeServicesEventStream.count >= @PODS_EMIT_STREAM_BATCH_SIZE
-          #       $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of service records emitted #{@PODS_EMIT_STREAM_BATCH_SIZE} @ #{Time.now.utc.iso8601}")
-          #       router.emit_stream(@kubeservicesTag, kubeServicesEventStream) if kubeServicesEventStream
-          #       kubeServicesEventStream = Fluent::MultiEventStream.new
-          #       if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
-          #         $log.info("kubeServicesEventEmitStreamSuccess @ #{Time.now.utc.iso8601}")
-          #       end
-          #     end
-          #   end
-          # end
-
-          if kubeServicesEventStream.count > 0
-            $log.info("in_kube_podinventory::parse_and_emit_merge_updates : number of service records emitted #{kubeServicesEventStream.count} @ #{Time.now.utc.iso8601}")
-            router.emit_stream(@kubeservicesTag, kubeServicesEventStream) if kubeServicesEventStream
-            if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
-              $log.info("kubeServicesEventEmitStreamSuccess @ #{Time.now.utc.iso8601}")
-            end
-          end
-          kubeServicesEventStream = nil
-        end
-
-        #Updating value for AppInsights telemetry
-        # @podCount += podInventory["items"].length
       rescue => errorStr
         $log.warn "Failed in parse_and_emit_merge_updates pod inventory: #{errorStr}"
         $log.debug_backtrace(errorStr.backtrace)
@@ -712,9 +642,10 @@ module Fluent::Plugin
           fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
-        @podInventoryHash = Yajl::Parser.parse(fileContents)
-        # @podInventoryHash = JSON.parse(fileContents)
-        $log.info("in_kube_podinventory::merge_updates : parse successful")
+        if !fileContents.empty?
+          @podInventoryHash = Yajl::Parser.parse(fileContents).to_hash
+          $log.info("in_kube_podinventory::merge_updates : parse successful.")
+        end
       rescue => error
         $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error}: #{error.backtrace}")
       end
@@ -723,42 +654,44 @@ module Fluent::Plugin
 
       uidList = []
 
-      @mutex.synchronize {
-        @noticeHash.each do |uid, record|
-          $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
+      # @mutex.synchronize {
+      #   @noticeHash.each do |uid, record|
+      #     $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
 
-          uidList.append(uid)
+      #     uidList.append(uid)
 
-          case record["NoticeType"]
-          when "ADDED"
-            @podInventoryHash[uid] = record
-            $log.info("in_kube_podinventory::merge_updates : added new record to podInventoryHash")
-          when "MODIFIED"
-            if @podInventoryHash[uid].nil?
-              $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
-              @podInventoryHash[uid] = record
-            else
-              $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{@podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
-              val = @podInventoryHash[uid]
-              val["PodStatus"] = record["PodStatus"]
-              @podInventoryHash[uid] = val
-            end
-            $log.info("in_kube_podinventory::merge_updates :: modified and changes reflected in podInventoryHash")
-          when "DELETED"
-            @podInventoryHash.delete(uid)
-            $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
-          else
-            $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
-          end
-          # $log.info("in_kube_podinventory::merge_updates :: end of switch")
-        end
+      #     case record["NoticeType"]
+      #     when "ADDED"
+      #       @podInventoryHash[uid] = record
+      #       $log.info("in_kube_podinventory::merge_updates : added new record to podInventoryHash")
+      #     when "MODIFIED"
+      #       if @podInventoryHash[uid].nil?
+      #         $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
+      #         @podInventoryHash[uid] = record
+      #       else
+      #         $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{@podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
+      #         val = @podInventoryHash[uid]
+      #         val["PodStatus"] = record["PodStatus"]
+      #         @podInventoryHash[uid] = val
+      #       end
+      #       $log.info("in_kube_podinventory::merge_updates :: modified and changes reflected in podInventoryHash")
+      #     when "DELETED"
+      #       @podInventoryHash.delete(uid)
+      #       $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
+      #     else
+      #       $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
+      #     end
+      #     # $log.info("in_kube_podinventory::merge_updates :: end of switch")
+      #   end
 
-        # remove all looked at uids from the noticeHash
-        uidList.each do |uid|
-          @noticeHash.delete(uid)
-        end
-        $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash")
-      }
+      #   # remove all looked at uids from the noticeHash
+      #   uidList.each do |uid|
+      #     @noticeHash.delete(uid)
+      #   end
+      #   # copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
+
+      #   $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash")
+      # }
 
       #TODO: Look for a way to replace only necessary contents, rather than everything
       $log.info("in_kube_podinventory:: merge_updates : about to replace entire contents of testing-podinventory.json")
@@ -766,8 +699,10 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty, will write to file")
         # only write if there is a change
         write_to_file(@podInventoryHash)
+        $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}")
 
         parse_and_emit_merge_updates(@podInventoryHash)
+        @podInventoryHash = {}
       else
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash was either null or empty, so NOT writing to file - should never be in this case")
       end
