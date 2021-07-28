@@ -150,16 +150,16 @@ module Fluent::Plugin
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-          @mmap << JSON.pretty_generate(@podInventoryHash.to_json).to_s
+          @mmap << JSON.pretty_generate(@podInventoryHash).to_s
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
-            file.write(JSON.pretty_generate(@podInventoryHash.to_json))
+            file.write(JSON.pretty_generate(@podInventoryHash))
           }
         end
 
         $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file")
-        $log.info("in_kube_podinventory::write_to_file : size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0}")
+        $log.info("in_kube_podinventory::write_to_file : size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
       rescue => exception
         $log.info("in_kube_podinventory::write_to_file : writing to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
       end
@@ -600,8 +600,11 @@ module Fluent::Plugin
         # Getting windows nodes from kubeapi
         winNodes = KubernetesApiClient.getWindowsNodesArray
 
+        $log.info("parse_and_emit_merge_updates:: podInventoryRecords: #{podInventoryRecords}")
         podInventoryRecords.each do |uid, record|
+          $log.info("parse_and_emit_merge_updates:: inside each method. uid: #{uid}. record: #{record}")
           if !record.nil?
+            $log.info("parse_and_emit_merge_updates:: record is not null.")
             eventStream.add(emitTime, record) if record                                      
             @inventoryToMdmConvertor.process_pod_inventory_record(record)            
           end
@@ -625,7 +628,7 @@ module Fluent::Plugin
           eventStream = nil
         end
       rescue => errorStr
-        $log.warn "Failed in parse_and_emit_merge_updates pod inventory: #{errorStr}"
+        $log.warn "Failed in parse_and_emit_merge_updates pod inventory: #{errorStr}. backtrace: #{errorStr.backtrace}"
         $log.debug_backtrace(errorStr.backtrace)
         ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
       end #begin block end
@@ -644,7 +647,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::merge_updates : file contents read")
         if !fileContents.empty?
           @podInventoryHash = Yajl::Parser.parse(fileContents)
-          $log.info("in_kube_podinventory::merge_updates : parse successful.")
+          $log.info("in_kube_podinventory::merge_updates : parse successful. size of hash: #{@podInventoryHash.size()} podInventoryHash: #{@podInventoryHash}")
         end
       rescue => error
         $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error}: #{error.backtrace}")
@@ -699,8 +702,7 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty, will write to file")
         # only write if there is a change
         write_to_file(@podInventoryHash)
-        $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}")
-
+        $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}. podInventoryHash: #{@podInventoryHash}")
         parse_and_emit_merge_updates(@podInventoryHash)
         @podInventoryHash = {}
       else
