@@ -643,7 +643,7 @@ module Fluent::Plugin
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
         if !fileContents.empty?
-          @podInventoryHash = Yajl::Parser.parse(fileContents).to_hash
+          @podInventoryHash = Yajl::Parser.parse(fileContents)
           $log.info("in_kube_podinventory::merge_updates : parse successful.")
         end
       rescue => error
