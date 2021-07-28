@@ -144,7 +144,9 @@ module Fluent::Plugin
             }
           end
         else
+          $log.info("write_to_file:: else case coming from merge. podInventory: #{podInventory}")
           @podInventoryHash = podInventory
+          $log.info("write_to_file:: else case: size: #{podInventory.size()}")
         end
 
         # Write to mmap or regular file based on value of @useMmap flag
@@ -602,7 +604,7 @@ module Fluent::Plugin
 
         $log.info("parse_and_emit_merge_updates:: podInventoryRecords: #{podInventoryRecords}")
         podInventoryRecords.each do |uid, record|
-          $log.info("parse_and_emit_merge_updates:: inside each method. uid: #{uid}. record: #{record}")
+          # $log.info("parse_and_emit_merge_updates:: inside each method. uid: #{uid}. record: #{record}")
           if !record.nil?
             $log.info("parse_and_emit_merge_updates:: record is not null.")
             eventStream.add(emitTime, record) if record                                      
@@ -657,44 +659,44 @@ module Fluent::Plugin
 
       uidList = []
 
-      # @mutex.synchronize {
-      #   @noticeHash.each do |uid, record|
-      #     $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
+      @mutex.synchronize {
+        @noticeHash.each do |uid, record|
+          $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
 
-      #     uidList.append(uid)
+          uidList.append(uid)
 
-      #     case record["NoticeType"]
-      #     when "ADDED"
-      #       @podInventoryHash[uid] = record
-      #       $log.info("in_kube_podinventory::merge_updates : added new record to podInventoryHash")
-      #     when "MODIFIED"
-      #       if @podInventoryHash[uid].nil?
-      #         $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
-      #         @podInventoryHash[uid] = record
-      #       else
-      #         $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{@podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
-      #         val = @podInventoryHash[uid]
-      #         val["PodStatus"] = record["PodStatus"]
-      #         @podInventoryHash[uid] = val
-      #       end
-      #       $log.info("in_kube_podinventory::merge_updates :: modified and changes reflected in podInventoryHash")
-      #     when "DELETED"
-      #       @podInventoryHash.delete(uid)
-      #       $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
-      #     else
-      #       $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
-      #     end
-      #     # $log.info("in_kube_podinventory::merge_updates :: end of switch")
-      #   end
+          case record["NoticeType"]
+          when "ADDED"
+            @podInventoryHash[uid] = record
+            $log.info("in_kube_podinventory::merge_updates : added new record to podInventoryHash")
+          when "MODIFIED"
+            if @podInventoryHash[uid].nil?
+              $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
+              @podInventoryHash[uid] = record
+            else
+              $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{@podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
+              val = @podInventoryHash[uid]
+              val["PodStatus"] = record["PodStatus"]
+              @podInventoryHash[uid] = val
+            end
+            $log.info("in_kube_podinventory::merge_updates :: modified and changes reflected in podInventoryHash")
+          when "DELETED"
+            @podInventoryHash.delete(uid)
+            $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
+          else
+            $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
+          end
+          # $log.info("in_kube_podinventory::merge_updates :: end of switch")
+        end
 
-      #   # remove all looked at uids from the noticeHash
-      #   uidList.each do |uid|
-      #     @noticeHash.delete(uid)
-      #   end
-      #   # copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
+        # remove all looked at uids from the noticeHash
+        uidList.each do |uid|
+          @noticeHash.delete(uid)
+        end
+        # copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
 
-      #   $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash")
-      # }
+        $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash")
+      }
 
       #TODO: Look for a way to replace only necessary contents, rather than everything
       $log.info("in_kube_podinventory:: merge_updates : about to replace entire contents of testing-podinventory.json")
@@ -704,7 +706,7 @@ module Fluent::Plugin
         write_to_file(@podInventoryHash)
         $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}. podInventoryHash: #{@podInventoryHash}")
         parse_and_emit_merge_updates(@podInventoryHash)
-        @podInventoryHash = {}
+        @podInventoryHash.clear
       else
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash was either null or empty, so NOT writing to file - should never be in this case")
       end
