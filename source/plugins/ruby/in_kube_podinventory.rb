@@ -156,7 +156,14 @@ module Fluent::Plugin
           @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
 
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
+          $log.info("write_to_file:: podInventoryHash: #{@podInventoryHash}")
           @mmap << JSON.pretty_generate(@podInventoryHash).to_s
+
+          sanityCheck = ""
+          sanityCheck = sanityCheck.dup if sanityCheck.frozen?
+          sanityCheck << @mmap
+
+          $log.info("write_to_file:: sanity check: #{sanityCheck}")
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
           File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
@@ -652,6 +659,7 @@ module Fluent::Plugin
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
         if !fileContents.empty?
+          $log.info("merge_updates:: file contents before parsing: #{fileContents}")
           @podInventoryHash = Yajl::Parser.parse(fileContents)
           $log.info("in_kube_podinventory::merge_updates : parse successful. size of hash: #{@podInventoryHash.size()} podInventoryHash: #{@podInventoryHash}")
         end
