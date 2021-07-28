@@ -88,9 +88,9 @@ module Fluent::Plugin
 
         #TODO: assumption made regarding mode of new file - might mess up regular file case
         # File.new("testing-podinventory.json", "w")
-        if @useMmap
-          @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
-        end
+        # if @useMmap
+        #   @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
+        # end
 
         $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
         
@@ -151,6 +151,10 @@ module Fluent::Plugin
 
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
+          $log.info("in_kube_podinventory::write_to_file : creating new mmap file.")
+          File.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
+          @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
+
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
           @mmap << JSON.pretty_generate(@podInventoryHash).to_s
         else
