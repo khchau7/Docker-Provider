@@ -136,7 +136,7 @@ module Fluent::Plugin
       begin
         if !podInventory["items"].nil? && !podInventory["items"].empty?
           podInventory["items"].each do |item|
-            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record
+            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record 
             podInventoryRecords = getPodInventoryRecords(item, servRecords, batchTime)
             podInventoryRecords.each { |record|
               uid = record["PodUid"]
@@ -618,7 +618,10 @@ module Fluent::Plugin
         podInventoryRecords.each do |uid, record|
           # $log.info("parse_and_emit_merge_updates:: inside each method. uid: #{uid}. record: #{record}")
           if !record.nil?
-            $log.info("parse_and_emit_merge_updates:: record is not null.")
+            $log.info("parse_and_emit_merge_updates:: emitTime: #{emitTime}. batchTime: #{batchTime}. record collection time: #{record["CollectionTime"]}")
+            # $log.info("parse_and_emit_merge_updates:: record is not null.")
+            record["CollectionTime"] = batchTime
+            $log.info("parse_and_emit_merge_updates:: record collection time: #{record["CollectionTime"]}")
             eventStream.add(emitTime, record) if record                                      
             @inventoryToMdmConvertor.process_pod_inventory_record(record)            
           end
