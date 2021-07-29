@@ -9,7 +9,7 @@
       "value": "West US 2"
     },
     "workspaceResourceId": {
-      "value": "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/defaultresourcegroup-suk/providers/microsoft.operationalinsights/workspaces/defaultworkspace-b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188-suk"
+      "value": "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/defaultresourcegroup-scus/providers/microsoft.operationalinsights/workspaces/defaultworkspace-b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188-scus"
     }
   }
 }
