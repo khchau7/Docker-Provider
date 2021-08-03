@@ -640,6 +640,8 @@ module Fluent::Plugin
     end
 
     def merge_updates
+      startTime = Time.now.utc.iso8601
+      $log.info("merge_updates:: Start time: #{startTime}")
       podInventoryHash = {}
 
       begin
@@ -704,7 +706,7 @@ module Fluent::Plugin
         end
         # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
 
-        $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash. noticeHash size: #{noticeHash.size()}. uidList size: #{uidList.size()}")
+        $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash. noticeHash size: #{@noticeHash.size()}. uidList size: #{uidList.size()}")
       }
 
       #TODO: Look for a way to replace only necessary contents, rather than everything
@@ -723,6 +725,9 @@ module Fluent::Plugin
       end
 
       $log.info("in_kube_podinventory:: merge_updates : finished replacing contents of testing-podinventory.json")
+      endTime = Time.now.utc.iso8601
+      $log.info("merge_updates:: End time: #{endTime}")
+      $log.info("merge_updates:: total time taken = #{endTime - startTime}")
     end
 
     def run_periodic
