@@ -47,6 +47,7 @@ module Fluent::Plugin
       @noticeHash = {}
       # @podInventoryHash = {}
       @useMmap = false
+      @collection_version = ""
       
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
@@ -335,8 +336,9 @@ module Fluent::Plugin
             $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session. backtrace: #{exception.backtrace}")
             # $log.debug_backtrace(exception.backtrace)
         end
-        #TODO: check if 300 is the correct number to use here
-        sleep 300
+        #TODO: check if 30 is the correct number to use here
+        # currently sleeping for 30 seconds before restarting
+        sleep 30
       end
     end
 
@@ -684,6 +686,7 @@ module Fluent::Plugin
       startTime = Time.now
       $log.info("merge_updates:: Start time: #{startTime}")
       podInventoryHash = {}
+      shouldUpdateFile = false
 
       begin
         fileContents = ""
@@ -710,6 +713,7 @@ module Fluent::Plugin
       @mutex.synchronize {
 
         shouldUpdateFile = @noticeHash.size() == 0 ? false : true
+        $log.info("merge_updates:: shouldUpdateFile value is #{shouldUpdateFile}")
 
         @noticeHash.each do |uid, record|
           $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
@@ -743,7 +747,7 @@ module Fluent::Plugin
           end
         end
 
-        $log.info("merge_updates:: uid list length: #{uidList.size()}")
+        $log.info("merge_updates:: uid list length: #{uidList.size()}. noticeHash size before deletion: #{@noticeHash.size()}")
         # remove all looked at uids from the noticeHash
         uidList.each do |uid|
           @noticeHash.delete(uid)
