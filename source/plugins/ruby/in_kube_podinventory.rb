@@ -119,6 +119,46 @@ module Fluent::Plugin
       end
     end
 
+    def append_to_file(podInventory)
+      # only to be called from enumerate continuation token 
+      batchTime = Time.now.utc.iso8601
+      serviceRecords = @serviceRecords
+      podInventoryHash = {}
+
+      begin
+        if !podInventory["items"].nil? && !podInventory["items"].empty?
+          podInventory["items"].each do |item|
+            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record 
+            podInventoryRecords = getPodInventoryRecords(item, serviceRecords, batchTime)
+            podInventoryRecords.each { |record|
+              uid = record["PodUid"]
+              podInventoryHash[uid] = record
+            }
+          end
+        end
+
+        $log.info("append_to_file:: podInventoryHash size before write: #{podInventoryHash.size()}")
+
+        # Write to mmap or regular file based on value of @useMmap flag
+        if @useMmap
+          $log.info("in_kube_podinventory::append_to_file : writing to mmap file case")
+          # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "a")
+          @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
+          @mmap << JSON.pretty_generate(podInventoryHash).to_s
+        else
+          $log.info("in_kube_podinventory::append_to_file : writing to regular file case")
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "a") { |file|
+            file.write(JSON.pretty_generate(podInventoryHash))
+          }
+        end
+
+        $log.info("in_kube_podinventory::append_to_file : successfully finished appending to file. size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
+      rescue => exception
+        $log.info("in_kube_podinventory::append_to_file : appending to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
+      end
+    end 
+
     def write_to_file(podInventory)
       batchTime = Time.now.utc.iso8601
       #TODO: check if you can pass @serviceRecords into getPodInventoryRecords rather than creating a local copy
@@ -283,7 +323,8 @@ module Fluent::Plugin
               $log.info("watch:: record constructed looks like: #{record}")
 
               @mutex.synchronize {
-                  @noticeHash[item["metadata"]["uid"]] = record
+                # could be an issue here
+                @noticeHash[item["metadata"]["uid"]] = record
               }
 
               $log.info("in_kube_podinventory::watch : number of items in noticeHash = #{@noticeHash.size}")
@@ -364,7 +405,7 @@ module Fluent::Plugin
           @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
           if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
             $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-            write_to_file(podInventory)
+            append_to_file(podInventory)
             parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
           else
             $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
@@ -640,7 +681,7 @@ module Fluent::Plugin
     end
 
     def merge_updates
-      startTime = Time.now.utc.iso8601
+      startTime = Time.now
       $log.info("merge_updates:: Start time: #{startTime}")
       podInventoryHash = {}
 
@@ -667,6 +708,9 @@ module Fluent::Plugin
       uidList = []
 
       @mutex.synchronize {
+
+        shouldUpdateFile = @noticeHash.size() == 0 ? false : true
+
         @noticeHash.each do |uid, record|
           $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
 
@@ -712,12 +756,17 @@ module Fluent::Plugin
       #TODO: Look for a way to replace only necessary contents, rather than everything
       $log.info("in_kube_podinventory:: merge_updates : about to replace entire contents of testing-podinventory.json")
       if (!podInventoryHash.nil? && !podInventoryHash.empty?)
-        $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty, will write to file. podInventoryHash size after hash loop: #{podInventoryHash.size()}")
+        $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty. podInventoryHash size after hash loop: #{podInventoryHash.size()}")
         # only write if there is a change
-        write_to_file(podInventoryHash)
+        if shouldUpdateFile
+          $log.info("in_kube_podinventory:: merge_updates : shouldUpdateFile evals to true, therefore writing to file.")
+          write_to_file(podInventoryHash)
+        end
         $log.info("merge_updates:: number of items in podInventoryHash: #{podInventoryHash.length}")
         # $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}. podInventoryHash: #{podInventoryHash}")
         parse_and_emit_merge_updates(podInventoryHash)
+        
+        #TODO: bottom two are not necessary - can remove later
         podInventoryHash.clear
         $log.info("merge_updates:: number of items in podInventoryHash after clear: #{podInventoryHash.length}")
       else
@@ -725,7 +774,7 @@ module Fluent::Plugin
       end
 
       $log.info("in_kube_podinventory:: merge_updates : finished replacing contents of testing-podinventory.json")
-      endTime = Time.now.utc.iso8601
+      endTime = Time.now
       $log.info("merge_updates:: End time: #{endTime}")
       $log.info("merge_updates:: total time taken = #{endTime - startTime}")
     end
