@@ -86,7 +86,6 @@ module Fluent::Plugin
         if (!ENV["USEMMAP"].nil? && !ENV["USEMMAP"].empty? && ENV["USEMMAP"].casecmp("true") == 0)
           @useMmap = true
         end
-
         $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
         
         # create kubernetes watch client
@@ -95,7 +94,7 @@ module Fluent::Plugin
           verify_ssl: OpenSSL::SSL::VERIFY_PEER,
         }
         timeouts = {
-          open: 60  # default setting (in seconds)
+          open: 60,  # default setting (in seconds)
           read: nil # read will never timeout
         }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
@@ -130,6 +129,27 @@ module Fluent::Plugin
       serviceRecords = @serviceRecords
       podInventoryHash = {}
 
+      # have to read file first
+      # TODO: make podInventoryHash an instance variable so we don't have read everytime 
+      begin
+        fileContents = ""
+        # Read file
+        if @useMmap
+          fileContents = fileContents.dup if fileContents.frozen?
+          fileContents << @mmap
+        else
+          # define path above instead of hardcoding here
+          fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
+        end
+        $log.info("in_kube_podinventory::append_to_file : file contents read")
+        if !fileContents.empty?
+          podInventoryHash = Yajl::Parser.parse(fileContents)
+          $log.info("in_kube_podinventory::append_to_file : parse successful. size of hash: #{podInventoryHash.size()}")
+        end
+      rescue => error
+        $log.info("in_kube_podinventory::append_to_file : something went wrong with reading file. #{error}: #{error.backtrace}")
+      end 
+
       begin
         if !podInventory["items"].nil? && !podInventory["items"].empty?
           podInventory["items"].each do |item|
@@ -148,12 +168,12 @@ module Fluent::Plugin
         if @useMmap
           $log.info("in_kube_podinventory::append_to_file : writing to mmap file case")
           # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
-          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "a")
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
           @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
           @mmap << JSON.pretty_generate(podInventoryHash).to_s
         else
           $log.info("in_kube_podinventory::append_to_file : writing to regular file case")
-          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "a") { |file|
+          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
             file.write(JSON.pretty_generate(podInventoryHash))
           }
         end
@@ -701,6 +721,7 @@ module Fluent::Plugin
           fileContents = fileContents.dup if fileContents.frozen?
           fileContents << @mmap
         else
+          # define path above instead of hardcoding here
           fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
         end
         $log.info("in_kube_podinventory::merge_updates : file contents read")
@@ -735,6 +756,7 @@ module Fluent::Plugin
               $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
               podInventoryHash[uid] = record
             else
+              # TODO: will need to modify other fields later
               $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
               val = podInventoryHash[uid]
               val["PodStatus"] = record["PodStatus"]
