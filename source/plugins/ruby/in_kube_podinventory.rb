@@ -94,9 +94,13 @@ module Fluent::Plugin
           ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
           verify_ssl: OpenSSL::SSL::VERIFY_PEER,
         }
+        timeouts = {
+          open: 60  # default setting (in seconds)
+          read: nil # read will never timeout
+        }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
-        @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed)
+        @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed, timeouts: timeouts)
         $log.info("in_kube:podinventory::start: successfully created kubernetes watch client")
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
