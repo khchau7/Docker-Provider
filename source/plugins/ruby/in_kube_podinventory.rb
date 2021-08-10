@@ -186,6 +186,7 @@ module Fluent::Plugin
     def read_file
       begin
         fileContents = ""
+        podInventoryHash = {}
         # Read file
         if @useMmap
           fileContents = fileContents.dup if fileContents.frozen?
@@ -197,11 +198,12 @@ module Fluent::Plugin
         # $log.info("in_kube_podinventory::append_to_file : file contents read")
         if !fileContents.empty?
           podInventoryHash = Yajl::Parser.parse(fileContents)
-          # $log.info("in_kube_podinventory::append_to_file : parse successful. size of hash: #{podInventoryHash.size()}")
         end
       rescue => error
-        $log.info("in_kube_podinventory::append_to_file : something went wrong with reading file. #{error}: #{error.backtrace}")
+        $log.info("in_kube_podinventory::read_file : something went wrong with reading file. #{error}: #{error.backtrace}")
       end 
+
+      $log.info("in_kube_podinventory::read_file : read successful. size of hash: #{podInventoryHash.size()}")
       return podInventoryHash
     end
 
@@ -216,7 +218,8 @@ module Fluent::Plugin
       if append
         # have to read file first
         # TODO: make podInventoryHash an instance variable so we don't have read everytime 
-        read_file
+        $log.info("write_to_file:: append is true, so will read file first")
+        podInventoryHash = read_file
       end
 
       begin
@@ -233,7 +236,7 @@ module Fluent::Plugin
           podInventoryHash = podInventory
         end
 
-        # $log.info("write_to_file:: podInventoryHash size before write: #{podInventoryHash.size()}")
+        $log.info("write_to_file:: podInventoryHash size before write: #{podInventoryHash.size()}")
 
         # Write to mmap or regular file based on value of @useMmap flag
         if @useMmap
@@ -735,7 +738,8 @@ module Fluent::Plugin
       shouldUpdateFile = false
 
       # read file
-      read_file
+      podInventoryHash = read_file
+      $log.info("merge_updates:: podInventoryHash size : #{podInventoryHash.size()}")
       # begin
       #   fileContents = ""
       #   # Read file
