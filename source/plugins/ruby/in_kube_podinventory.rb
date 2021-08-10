@@ -95,7 +95,7 @@ module Fluent::Plugin
         }
         timeouts = {
           open: 60,  # default setting (in seconds)
-          read: :open  # read will never timeout
+          read: nil  # read will never timeout
         }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
