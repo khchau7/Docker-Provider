@@ -45,7 +45,6 @@ module Fluent::Plugin
       @podsAPIE2ELatencyMs = 0    
 
       @noticeHash = {}
-      # @podInventoryHash = {}
       @useMmap = false
       @collection_version = ""
       
@@ -53,6 +52,7 @@ module Fluent::Plugin
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
       @containerInventoryTag = "oneagent.containerInsights.CONTAINER_INVENTORY_BLOB"
       @insightsMetricsTag = "oneagent.containerInsights.INSIGHTS_METRICS_BLOB" 
+      @podInventoryFile = "/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json"
     end
 
     config_param :run_interval, :time, :default => 60
@@ -86,7 +86,7 @@ module Fluent::Plugin
         if (!ENV["USEMMAP"].nil? && !ENV["USEMMAP"].empty? && ENV["USEMMAP"].casecmp("true") == 0)
           @useMmap = true
         end
-        $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
+        $log.info("in_kube_podinventory::start: use mmap state is: #{@useMmap}")
         
         # create kubernetes watch client
         ssl_options = {
@@ -94,7 +94,7 @@ module Fluent::Plugin
           verify_ssl: OpenSSL::SSL::VERIFY_PEER,
         }
         timeouts = {
-          open: 60,  # default setting (in seconds)
+          open: nil,  # default setting (in seconds)
           read: nil  # read will never timeout
         }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
@@ -122,67 +122,6 @@ module Fluent::Plugin
       end
     end
 
-    # def append_to_file(podInventory)
-    #   # only to be called from enumerate continuation token 
-    #   batchTime = Time.now.utc.iso8601
-    #   serviceRecords = @serviceRecords
-    #   podInventoryHash = {}
-
-    #   # have to read file first
-    #   # TODO: make podInventoryHash an instance variable so we don't have read everytime 
-    #   begin
-    #     fileContents = ""
-    #     # Read file
-    #     if @useMmap
-    #       fileContents = fileContents.dup if fileContents.frozen?
-    #       fileContents << @mmap
-    #     else
-    #       # define path above instead of hardcoding here
-    #       fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
-    #     end
-    #     $log.info("in_kube_podinventory::append_to_file : file contents read")
-    #     if !fileContents.empty?
-    #       podInventoryHash = Yajl::Parser.parse(fileContents)
-    #       $log.info("in_kube_podinventory::append_to_file : parse successful. size of hash: #{podInventoryHash.size()}")
-    #     end
-    #   rescue => error
-    #     $log.info("in_kube_podinventory::append_to_file : something went wrong with reading file. #{error}: #{error.backtrace}")
-    #   end 
-
-    #   begin
-    #     if !podInventory["items"].nil? && !podInventory["items"].empty?
-    #       podInventory["items"].each do |item|
-    #         # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record 
-    #         podInventoryRecords = getPodInventoryRecords(item, serviceRecords, batchTime)
-    #         podInventoryRecords.each { |record|
-    #           uid = record["PodUid"]
-    #           podInventoryHash[uid] = record
-    #         }
-    #       end
-    #     end
-
-    #     $log.info("append_to_file:: podInventoryHash size before write: #{podInventoryHash.size()}")
-
-    #     # Write to mmap or regular file based on value of @useMmap flag
-    #     if @useMmap
-    #       $log.info("in_kube_podinventory::append_to_file : writing to mmap file case")
-    #       # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
-    #       File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
-    #       @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
-    #       @mmap << JSON.pretty_generate(podInventoryHash).to_s
-    #     else
-    #       $log.info("in_kube_podinventory::append_to_file : writing to regular file case")
-    #       File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
-    #         file.write(JSON.pretty_generate(podInventoryHash))
-    #       }
-    #     end
-
-    #     $log.info("in_kube_podinventory::append_to_file : successfully finished appending to file. size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
-    #   rescue => exception
-    #     $log.info("in_kube_podinventory::append_to_file : appending to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
-    #   end
-    # end 
-
     def read_file
       begin
         fileContents = ""
@@ -193,7 +132,7 @@ module Fluent::Plugin
           fileContents << @mmap
         else
           # define path above instead of hardcoding here
-          fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
+          fileContents = File.read(@podInventoryFile)
         end
         # $log.info("in_kube_podinventory::append_to_file : file contents read")
         if !fileContents.empty?
@@ -242,17 +181,17 @@ module Fluent::Plugin
         if @useMmap
           $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
           # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
-          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
-          @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
+          File.open(@podInventoryFile, "w")
+          @mmap = Mmap.new(@podInventoryFile, "rw")
           @mmap << JSON.pretty_generate(podInventoryHash).to_s
         else
           $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
-          File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
+          File.open(@podInventoryFile, "w") { |file|
             file.write(JSON.pretty_generate(podInventoryHash))
           }
         end
 
-        $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file. size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
+        $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file. size of written file = #{File.size(@podInventoryFile) / 1000000.0} MB")
       rescue => exception
         $log.info("in_kube_podinventory::write_to_file : writing to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
       end
@@ -264,6 +203,7 @@ module Fluent::Plugin
       item = notice["object"]
       #TODO: check assumption that batch time can be current time (CollectionTime)
       batchTime = Time.now.utc.iso8601
+      serviceRecords = @serviceRecords
   
       begin
         record["CollectionTime"] = batchTime
@@ -319,7 +259,7 @@ module Fluent::Plugin
         record["ClusterId"] = KubernetesApiClient.getClusterId
         record["ClusterName"] = KubernetesApiClient.getClusterName
         #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
-        record["ServiceName"] = ""
+        record["ServiceName"] = getServiceNameFromLabels(item["metadata"]["namespace"], item["metadata"]["label"], serviceRecords)
 
         if !item["metadata"]["ownerReferences"].nil?
           record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
