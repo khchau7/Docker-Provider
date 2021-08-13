@@ -55,7 +55,7 @@ gem install gyoku iso8601 --no-doc
 # kubeclient gem
 sudo apt-get install libmagickwand-dev -y
 # sudo gem install kubeclient --no-document
-sudo gem install /home/khushic/kubeclient/kubeclient-4.9.2.gem
+sudo gem install $TMPDIR/kubeclient-4.9.2.gem -y
 # mmap2 gem
 sudo gem install mmap2
 
