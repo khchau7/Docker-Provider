@@ -287,6 +287,8 @@ chmod 666 /var/opt/microsoft/docker-cimprov/log/arc_k8s_cluster_identity.log
 touch /var/opt/microsoft/docker-cimprov/log/fluentd.log
 chmod 666 /var/opt/microsoft/docker-cimprov/log/fluentd.log
 
+touch /var/opt/microsoft/docker-cimprov/log/testing-podinventory.json
+chmod 666 /var/opt/microsoft/docker-cimprov/log/testing-podinventory.json
 
 %Postuninstall_10
 # If we're an upgrade, skip all of this cleanup

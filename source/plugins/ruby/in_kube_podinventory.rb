@@ -95,11 +95,8 @@ module Fluent::Plugin
         }
         timeouts = {
           open: 60,  # default setting (in seconds)
-          read: nil # read will never timeout
+          read: 240  # read timeout = 4 min
         }
-        # socket_options = {
-
-        # }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
         @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed, timeouts: timeouts)
