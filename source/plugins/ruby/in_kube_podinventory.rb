@@ -362,10 +362,8 @@ module Fluent::Plugin
             $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session. backtrace: #{exception.backtrace}")
             # $log.debug_backtrace(exception.backtrace)
         end
-        #TODO: check if 30 is the correct number to use here
-        # currently sleeping for 30 seconds before restarting
         $log.info("in_kube_podinventory::watch : makes it to the sleep command. time: #{Time.now.utc.iso8601}")
-        sleep 30
+        sleep 1
         $log.info("in_kube_podinventory::watch : after sleep command. time: #{Time.now.utc.iso8601}")
       end
     end
