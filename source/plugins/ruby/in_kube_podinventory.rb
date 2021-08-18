@@ -45,7 +45,6 @@ module Fluent::Plugin
       @podsAPIE2ELatencyMs = 0    
 
       @noticeHash = {}
-      # @podInventoryHash = {}
       @useMmap = false
       @collection_version = ""
       
@@ -95,11 +94,12 @@ module Fluent::Plugin
         }
         timeouts = {
           open: 60,  # default setting (in seconds)
-          read: 240  # read timeout = 4 min
+          read: nil  # read never times out
         }
         getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
         @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed, timeouts: timeouts)
+        @Watcher = nil
         $log.info("in_kube:podinventory::start: successfully created kubernetes watch client")
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
@@ -108,6 +108,7 @@ module Fluent::Plugin
         @watchthread = Thread.new(&method(:watch))
         @thread = Thread.new(&method(:run_periodic))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
+        @@WatcherTimeTracker = DateTime.now.to_time.to_i
       end
     end
 
@@ -336,7 +337,8 @@ module Fluent::Plugin
         #TODO: check if collection_version is correct when continuation token is not null and collection_version changes
         $log.info("in_kube_podinventory::watch : inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
-          @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed) do |notice|
+          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed)
+          @Watcher.each do |notice|
             $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
             if !notice.nil? && !notice.empty?
               $log.info("in_kube_podinventory::watch : received a notice that is not null and not empty. notice type: #{notice["type"]}")
@@ -670,6 +672,16 @@ module Fluent::Plugin
       emittedPodCount = 0
 
       begin #begin block start
+        timeDifference = (DateTime.now.to_time.to_i - @@WatcherTimeTracker).abs
+        timeDifferenceInMinutes = timeDifference / 60
+        if (timeDifferenceInMinutes >= 25)
+          $log.info("parse_and_emit_merge_updates::resetting watcher to handle api server timeout :#{Time.now.utc.iso8601}")
+          @@WatcherTimeTracker = DateTime.now.to_time.to_i
+          if !@Watcher.nil?
+             @Watcher.finish
+          end
+        end
+
         # Getting windows nodes from kubeapi
         winNodes = KubernetesApiClient.getWindowsNodesArray
         podInventoryRecords.each do |uid, record|
