@@ -810,8 +810,8 @@ module Fluent::Plugin
         parse_and_emit_merge_updates(@podInventoryHash)
         
         #TODO: bottom two are not necessary - can remove later
-        @podInventoryHash.clear
-        $log.info("merge_updates:: number of items in podInventoryHash after clear: #{@podInventoryHash.length}")
+        # @podInventoryHash.clear
+        # $log.info("merge_updates:: number of items in podInventoryHash after clear: #{@podInventoryHash.length}")
       else
         $log.info("in_kube_podinventory:: merge_updates : podInventoryHash was either null or empty, so NOT writing to file - should never be in this case")
       end
