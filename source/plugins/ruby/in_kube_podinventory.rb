@@ -338,7 +338,7 @@ module Fluent::Plugin
         #TODO: check if collection_version is correct when continuation token is not null and collection_version changes
         $log.info("in_kube_podinventory::watch : inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
-          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, as: :parsed)
+          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 380, as: :parsed)
           @Watcher.each do |notice|
             $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
             if !notice.nil? && !notice.empty?
