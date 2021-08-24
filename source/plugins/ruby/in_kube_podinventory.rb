@@ -36,6 +36,8 @@ module Fluent::Plugin
       @PODS_CHUNK_SIZE = 0
       @PODS_EMIT_STREAM_BATCH_SIZE = 0
 
+      @watchRestartCount = 0
+
       @podCount = 0
       @serviceCount = 0
       @controllerSet = Set.new []
@@ -45,10 +47,9 @@ module Fluent::Plugin
       @podsAPIE2ELatencyMs = 0    
 
       @noticeHash = {}
-      @useMmap = false
       @collection_version = ""
       @podInventoryHash = {}
-      
+
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
       @containerInventoryTag = "oneagent.containerInsights.CONTAINER_INVENTORY_BLOB"
@@ -82,11 +83,6 @@ module Fluent::Plugin
           $log.warn("in_kube_podinventory::start: setting to default value since got PODS_EMIT_STREAM_BATCH_SIZE nil or empty")
           @PODS_EMIT_STREAM_BATCH_SIZE = 200
         end
-
-        if (!ENV["USEMMAP"].nil? && !ENV["USEMMAP"].empty? && ENV["USEMMAP"].casecmp("true") == 0)
-          @useMmap = true
-        end
-        $log.info("in_kube_podinventory::start: use mmap is: #{@useMmap}")
         
         # create kubernetes watch client
         ssl_options = {
@@ -101,15 +97,13 @@ module Fluent::Plugin
         auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
         @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed, timeouts: timeouts)
         @Watcher = nil
-        $log.info("in_kube:podinventory::start: successfully created kubernetes watch client")
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
         @condition = ConditionVariable.new
         @mutex = Mutex.new
         @watchthread = Thread.new(&method(:watch))
-        @thread = Thread.new(&method(:run_periodic))
+        @runthread = Thread.new(&method(:run_periodic))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
-        @@WatcherTimeTracker = DateTime.now.to_time.to_i
       end
     end
 
@@ -120,38 +114,14 @@ module Fluent::Plugin
           @condition.signal
         }
         @watchthread.join
-        @thread.join
+        @runthread.join
         super # This super must be at the end of shutdown method
       end
     end
 
-    def append_to_file(podInventory)
-      # only to be called from enumerate continuation token 
+    def populate_hash(podInventory)
       batchTime = Time.now.utc.iso8601
       serviceRecords = @serviceRecords
-      # podInventoryHash = {}
-
-      # have to read file first
-      # TODO: make podInventoryHash an instance variable so we don't have read everytime 
-      # begin
-      #   fileContents = ""
-      #   # Read file
-      #   if @useMmap
-      #     fileContents = fileContents.dup if fileContents.frozen?
-      #     fileContents << @mmap
-      #   else
-      #     # define path above instead of hardcoding here
-      #     fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
-      #   end
-      #   $log.info("in_kube_podinventory::append_to_file : file contents read")
-      #   if !fileContents.empty?
-      #     podInventoryHash = Yajl::Parser.parse(fileContents)
-      #     $log.info("in_kube_podinventory::append_to_file : parse successful. size of hash: #{podInventoryHash.size()}")
-      #   end
-      # rescue => error
-      #   $log.info("in_kube_podinventory::append_to_file : something went wrong with reading file. #{error}: #{error.backtrace}")
-      # end 
-
       begin
         if !podInventory["items"].nil? && !podInventory["items"].empty?
           podInventory["items"].each do |item|
@@ -163,71 +133,11 @@ module Fluent::Plugin
             }
           end
         end
-
-        $log.info("append_to_file:: podInventoryHash size before write: #{@podInventoryHash.size()}")
-
-        # Write to mmap or regular file based on value of @useMmap flag
-        # if @useMmap
-        #   $log.info("in_kube_podinventory::append_to_file : writing to mmap file case")
-        #   # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
-        #   File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
-        #   @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
-        #   @mmap << JSON.pretty_generate(podInventoryHash).to_s
-        # else
-        #   $log.info("in_kube_podinventory::append_to_file : writing to regular file case")
-        #   File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
-        #     file.write(JSON.pretty_generate(podInventoryHash))
-        #   }
-        # end
-
-        # $log.info("in_kube_podinventory::append_to_file : successfully finished appending to file. size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
       rescue => exception
-        $log.info("in_kube_podinventory::append_to_file : appending to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
+        $log.info("in_kube_podinventory::populate_hash : populating podInventoryHash failed.")
+        $log.debug_backtrace(exception.backtrace)
       end
-    end 
-
-    def write_to_file(podInventory)
-      batchTime = Time.now.utc.iso8601
-      #TODO: check if you can pass @serviceRecords into getPodInventoryRecords rather than creating a local copy
-      #TODO: if no, update code so we simply use instance variable everywhere and there is no need to pass serviceRecords
-      serviceRecords= @serviceRecords
-      # podInventoryHash = {}
-
-      begin
-        if !podInventory["items"].nil? && !podInventory["items"].empty?
-          podInventory["items"].each do |item|
-            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record 
-            podInventoryRecords = getPodInventoryRecords(item, serviceRecords, batchTime)
-            podInventoryRecords.each { |record|
-              uid = record["PodUid"]
-              @podInventoryHash[uid] = record
-            }
-          end
-        else
-          @podInventoryHash = podInventory
-        end
-
-        $log.info("write_to_file:: podInventoryHash size before write: #{@podInventoryHash.size()}")
-
-        # Write to mmap or regular file based on value of @useMmap flag
-        # if @useMmap
-        #   $log.info("in_kube_podinventory::write_to_file : writing to mmap file case")
-        #   # this is to ensure that we clear file contents before writing to file, check if there is a better way to do this
-        #   File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w")
-        #   @mmap = Mmap.new("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "rw")
-        #   @mmap << JSON.pretty_generate(podInventoryHash).to_s
-        # else
-        #   $log.info("in_kube_podinventory::write_to_file : writing to regular file case")
-        #   File.open("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json", "w") { |file|
-        #     file.write(JSON.pretty_generate(podInventoryHash))
-        #   }
-        # end
-
-        # $log.info("in_kube_podinventory::write_to_file : successfully finished writing to file. size of written file = #{File.size("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json") / 1000000.0} MB")
-      rescue => exception
-        $log.info("in_kube_podinventory::write_to_file : writing to file failed. exception: #{exception} backtrace: #{exception.backtrace}")
-      end
-    end 
+    end
 
     def getNoticeRecord(notice)
       # Helper function that extracts necessary fields from notice JSON
@@ -287,9 +197,7 @@ module Fluent::Plugin
         end
 
         record["Computer"] = nodeName
-        #TODO: replace w KubernetesApiClient.getClusterId in agent code
         record["ClusterId"] = KubernetesApiClient.getClusterId
-        #TODO: replace w KubernetesApiClient.getClusterName in agent code
         record["ClusterName"] = KubernetesApiClient.getClusterName
         #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
         record["ServiceName"] = ""
@@ -328,44 +236,27 @@ module Fluent::Plugin
     end
 
     def watch
-      # enumerate
-
-      #TODO: Check if watch pods restarts after connection is broken
       loop do
-        $log.info("in_kube_podinventory::watch - inside infinite loop for watch pods. calling enumerate.")
         enumerate
-
-        #TODO: check if collection_version is correct when continuation token is not null and collection_version changes
-        $log.info("in_kube_podinventory::watch : inside infinite loop for watch pods. collection version: #{@collection_version}")
         begin
           @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 380, as: :parsed)
           @Watcher.each do |notice|
-            $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
             if !notice.nil? && !notice.empty?
-              $log.info("in_kube_podinventory::watch : received a notice that is not null and not empty. notice type: #{notice["type"]}")
-
               item = notice["object"]
               # Construct record with necessary fields (same fields as getPodInventoryRecords)
               record = getNoticeRecord(notice)
-
-              $log.info("watch:: record constructed looks like: #{record}")
-
               @mutex.synchronize {
-                # could be an issue here
                 @noticeHash[item["metadata"]["uid"]] = record
               }
-
               $log.info("in_kube_podinventory::watch : number of items in noticeHash = #{@noticeHash.size}")
             end
-            $log.info("in_kube_podinventory::watch : sanity check at the end of watch pods, need to jump back to the top. collection version: #{@collection_version}")
           end
         rescue => exception
-            $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session. backtrace: #{exception.backtrace}")
-            # $log.debug_backtrace(exception.backtrace)
+            $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
+            $log.debug_backtrace(exception.backtrace)
         end
-        $log.info("in_kube_podinventory::watch : makes it to the sleep command. time: #{Time.now.utc.iso8601}")
         sleep 1
-        $log.info("in_kube_podinventory::watch : after sleep command. time: #{Time.now.utc.iso8601}")
+        @watchRestartCount += 1
       end
     end
 
@@ -410,13 +301,13 @@ module Fluent::Plugin
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
         @collection_version = podInventory["metadata"]["resourceVersion"]
-        $log.info("in_kube_podinventory::enumerate : received collection version: #{@collection_version}")
+        $log.info("in_kube_podinventory::enumerate : Received collection version: #{@collection_version}")
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
         if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
           $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length}  from Kube API @ #{Time.now.utc.iso8601}")
-          write_to_file(podInventory)
+          populate_hash(podInventory)
           parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
         else
           $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
@@ -434,7 +325,7 @@ module Fluent::Plugin
           @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
           if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
             $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-            append_to_file(podInventory)
+            populate_hash(podInventory)
             parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
           else
             $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
@@ -459,7 +350,7 @@ module Fluent::Plugin
           telemetryProperties["Computer"] = @@hostName
           telemetryProperties["PODS_CHUNK_SIZE"] = @PODS_CHUNK_SIZE
           telemetryProperties["PODS_EMIT_STREAM_BATCH_SIZE"] = @PODS_EMIT_STREAM_BATCH_SIZE
-          telemetryProperties["USE_MMAP"] = @useMmap
+          telemetryProperties["WatchRestartCount"] = @watchRestartCount
           ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
           ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
           ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
@@ -671,16 +562,6 @@ module Fluent::Plugin
       emittedPodCount = 0
 
       begin #begin block start
-        timeDifference = (DateTime.now.to_time.to_i - @@WatcherTimeTracker).abs
-        timeDifferenceInMinutes = timeDifference / 60
-        if (timeDifferenceInMinutes >= 25)
-          $log.info("parse_and_emit_merge_updates::resetting watcher to handle api server timeout :#{Time.now.utc.iso8601}")
-          @@WatcherTimeTracker = DateTime.now.to_time.to_i
-          if !@Watcher.nil?
-             @Watcher.finish
-          end
-        end
-
         # Getting windows nodes from kubeapi
         winNodes = KubernetesApiClient.getWindowsNodesArray
         podInventoryRecords.each do |uid, record|
@@ -720,51 +601,17 @@ module Fluent::Plugin
     end
 
     def merge_updates
-      startTime = Time.now
-      $log.info("merge_updates:: Start time: #{startTime}")
-      # podInventoryHash = {}
-      shouldUpdateFile = false
-
-      # begin
-      #   fileContents = ""
-      #   # Read file
-      #   if @useMmap
-      #     fileContents = fileContents.dup if fileContents.frozen?
-      #     fileContents << @mmap
-      #   else
-      #     # define path above instead of hardcoding here
-      #     fileContents = File.read("/var/opt/microsoft/docker-cimprov/log/testing-podinventory.json")
-      #   end
-      #   $log.info("in_kube_podinventory::merge_updates : file contents read")
-      #   if !fileContents.empty?
-      #     podInventoryHash = Yajl::Parser.parse(fileContents)
-      #     $log.info("in_kube_podinventory::merge_updates : parse successful. size of hash: #{podInventoryHash.size()}")
-      #   end
-      # rescue => error
-      #   $log.info("in_kube_podinventory::merge_updates : something went wrong with reading file. #{error}: #{error.backtrace}")
-      # end 
-
-      $log.info("in_kube_podinventory::merge_updates : before noticeHash loop, number of items in hash: #{@noticeHash.size()}")
-
+      $log.info("in_kube_podinventory::merge_updates: number of updates in notice hash #{@noticeHash.size} @#{Time.now.utc.iso8601}")
       uidList = []
 
       @mutex.synchronize {
-
-        shouldUpdateFile = @noticeHash.size() == 0 ? false : true
-        $log.info("merge_updates:: shouldUpdateFile value is #{shouldUpdateFile}")
-
         @noticeHash.each do |uid, record|
-          $log.info("in_kube_podinventory::merge_updates : looping through noticeHash, type of notice: #{record["NoticeType"]}")
-
           uidList.append(uid)
-
           case record["NoticeType"]
           when "ADDED"
             @podInventoryHash[uid] = record
-            $log.info("in_kube_podinventory::merge_updates : added new record to podInventoryHash")
           when "MODIFIED"
             if @podInventoryHash[uid].nil?
-              $log.info("in_kube_podinventory::merge_updates : modify case where uid for add was overwritten to modify within same minute")
               @podInventoryHash[uid] = record
             else
               # TODO: will need to modify other fields later
@@ -773,53 +620,24 @@ module Fluent::Plugin
               val["PodStatus"] = record["PodStatus"]
               @podInventoryHash[uid] = val
             end
-            $log.info("in_kube_podinventory::merge_updates :: modified and changes reflected in podInventoryHash")
           when "DELETED"
             if @podInventoryHash.key?(uid)
               @podInventoryHash.delete(uid)
-              $log.info("in_kube_podinventory::merge_updates :: deleted from podInventoryHash")
             else
-              $log.info("merge_updates:: error: key did not exist in hash so unable to delete (probably add and delete in same min)")
+              $log.info("in_kube_podinventory::merge_updates: key did not exist in hash so unable to delete.")
             end
           else
-            $log.info("in_kube_podinventory::merge_updates :: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
+            $log.info("in_kube_podinventory::merge_updates: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
           end
         end
 
-        $log.info("merge_updates:: uid list length: #{uidList.size()}. noticeHash size before deletion: #{@noticeHash.size()}")
         # remove all looked at uids from the noticeHash
         uidList.each do |uid|
           @noticeHash.delete(uid)
         end
         # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
-
-        $log.info("in_kube_podinventory::merge_updates :: removed all visited uids from noticeHash. noticeHash size: #{@noticeHash.size()}. uidList size: #{uidList.size()}")
       }
-
-      #TODO: Look for a way to replace only necessary contents, rather than everything
-      $log.info("in_kube_podinventory:: merge_updates : about to replace entire contents of testing-podinventory.json")
-      if (!@podInventoryHash.nil? && !@podInventoryHash.empty?)
-        $log.info("in_kube_podinventory:: merge_updates : podInventoryHash not null and not empty. podInventoryHash size after hash loop: #{@podInventoryHash.size()}")
-        # only write if there is a change
-        if shouldUpdateFile
-          $log.info("in_kube_podinventory:: merge_updates : shouldUpdateFile evals to true, therefore writing to file.")
-          write_to_file(@podInventoryHash)
-        end
-        $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}")
-        # $log.info("merge_updates:: number of items in podInventoryHash: #{@podInventoryHash.length}. podInventoryHash: #{podInventoryHash}")
-        parse_and_emit_merge_updates(@podInventoryHash)
-        
-        #TODO: bottom two are not necessary - can remove later
-        # @podInventoryHash.clear
-        # $log.info("merge_updates:: number of items in podInventoryHash after clear: #{@podInventoryHash.length}")
-      else
-        $log.info("in_kube_podinventory:: merge_updates : podInventoryHash was either null or empty, so NOT writing to file - should never be in this case")
-      end
-
-      $log.info("in_kube_podinventory:: merge_updates : finished replacing contents of testing-podinventory.json")
-      endTime = Time.now
-      $log.info("merge_updates:: End time: #{endTime}")
-      $log.info("merge_updates:: total time taken = #{endTime - startTime}")
+      parse_and_emit_merge_updates(@podInventoryHash)
     end
 
     def run_periodic
@@ -842,7 +660,6 @@ module Fluent::Plugin
         if !done
           begin
             $log.info("in_kube_podinventory::run_periodic.merge_updates.start #{Time.now.utc.iso8601}")
-            # enumerate
             merge_updates
             $log.info("in_kube_podinventory::run_periodic.merge_updates.end #{Time.now.utc.iso8601}")
           rescue => errorStr
