@@ -104,6 +104,7 @@ module Fluent::Plugin
         @watchthread = Thread.new(&method(:watch))
         @runthread = Thread.new(&method(:run_periodic))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
+        @@WatcherTimeTracker = DateTime.now.to_time.to_i
       end
     end
 
@@ -139,7 +140,7 @@ module Fluent::Plugin
       end
     end
 
-    def getNoticeRecord(notice)
+    def getNoticeRecord(notice, serviceRecords)
       # Helper function that extracts necessary fields from notice JSON
       record = {}
       item = notice["object"]
@@ -152,6 +153,7 @@ module Fluent::Plugin
         podNameSpace = item["metadata"]["namespace"]
         #TODO: change uid later, handle case of horizontal scaling of pods but no controller (explained in getPodUid in KubenetesApiClient)
         podUid = item["metadata"]["uid"]
+        # podUid = KubenetesApiClient.getPodUid(podNameSpace, item["metadata"])
 
         nodeName = ""
         # For unscheduled (non-started) pods nodeName does NOT exist
@@ -200,7 +202,7 @@ module Fluent::Plugin
         record["ClusterId"] = KubernetesApiClient.getClusterId
         record["ClusterName"] = KubernetesApiClient.getClusterName
         #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
-        record["ServiceName"] = ""
+        record["ServiceName"] = getServiceNameFromLabels(item["metadata"]["namespace"], item["metadata"]["labels"], serviceRecords)
 
         if !item["metadata"]["ownerReferences"].nil?
           record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
@@ -238,13 +240,15 @@ module Fluent::Plugin
     def watch
       loop do
         enumerate
+        serviceRecords = @serviceRecords
         begin
-          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 380, as: :parsed)
+          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, allowWatchBookmarks: true, as: :parsed)
           @Watcher.each do |notice|
+            $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
             if !notice.nil? && !notice.empty?
               item = notice["object"]
               # Construct record with necessary fields (same fields as getPodInventoryRecords)
-              record = getNoticeRecord(notice)
+              record = getNoticeRecord(notice, serviceRecords)
               @mutex.synchronize {
                 @noticeHash[item["metadata"]["uid"]] = record
               }
@@ -562,6 +566,16 @@ module Fluent::Plugin
       emittedPodCount = 0
 
       begin #begin block start
+        timeDifference = (DateTime.now.to_time.to_i - @@WatcherTimeTracker).abs
+        timeDifferenceInMinutes = timeDifference / 60
+        if (timeDifferenceInMinutes >= 5)
+          $log.info("parse_and_emit_merge_updates::resetting watcher to handle api server timeout :#{Time.now.utc.iso8601}")
+          @@WatcherTimeTracker = DateTime.now.to_time.to_i
+          if !@Watcher.nil?
+             @Watcher.finish
+          end
+        end
+
         # Getting windows nodes from kubeapi
         winNodes = KubernetesApiClient.getWindowsNodesArray
         podInventoryRecords.each do |uid, record|
@@ -614,11 +628,8 @@ module Fluent::Plugin
             if @podInventoryHash[uid].nil?
               @podInventoryHash[uid] = record
             else
-              # TODO: will need to modify other fields later
-              $log.info("in_kube_podinventory::merge_updates : modify case where it is only a modification. old status: #{@podInventoryHash[uid]["PodStatus"]}. new status: #{record["PodStatus"]}")
-              val = @podInventoryHash[uid]
-              val["PodStatus"] = record["PodStatus"]
-              @podInventoryHash[uid] = val
+              $log.info("in_kube_podinventory::merge_updates : pure modify case")
+              @podInventoryHash[uid] = record
             end
           when "DELETED"
             if @podInventoryHash.key?(uid)
@@ -626,6 +637,8 @@ module Fluent::Plugin
             else
               $log.info("in_kube_podinventory::merge_updates: key did not exist in hash so unable to delete.")
             end
+          when "BOOKMARK"
+            $log.info("in_kube_podinventory::merge_updates: received a BOOKMARK event.")
           else
             $log.info("in_kube_podinventory::merge_updates: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
           end
