@@ -140,102 +140,6 @@ module Fluent::Plugin
       end
     end
 
-    # def getNoticeRecord(notice, serviceRecords)
-    #   # Helper function that extracts necessary fields from notice JSON
-    #   record = {}
-    #   item = notice["object"]
-    #   #TODO: check assumption that batch time can be current time (CollectionTime)
-    #   batchTime = Time.now.utc.iso8601
-  
-    #   begin
-    #     record["CollectionTime"] = batchTime
-    #     record["Name"] = item["metadata"]["name"]
-    #     podNameSpace = item["metadata"]["namespace"]
-    #     #TODO: change uid later, handle case of horizontal scaling of pods but no controller (explained in getPodUid in KubenetesApiClient)
-    #     podUid = item["metadata"]["uid"]
-    #     # podUid = KubenetesApiClient.getPodUid(podNameSpace, item["metadata"])
-
-    #     nodeName = ""
-    #     # For unscheduled (non-started) pods nodeName does NOT exist
-    #     if !item["spec"]["nodeName"].nil?
-    #       nodeName = item["spec"]["nodeName"]
-    #     end
-
-    #     record["PodUid"] = podUid
-    #     record["PodLabel"] = [item["metadata"]["labels"]]
-    #     record["Namespace"] = podNameSpace
-    #     record["PodCreationTimeStamp"] = item["metadata"]["creationTimestamp"]
-
-    #     if !item["status"]["startTime"].nil?
-    #       record["PodStartTime"] = item["status"]["startTime"]
-    #     else
-    #       record["PodStartTime"] = ""
-    #     end
-
-    #     #podStatus
-    #     # NodeLost scenario -- pod(s) in the lost node is still being reported as running
-    #     podReadyCondition = true 
-    #     if !item["status"]["reason"].nil? && item["status"]["reason"] == "NodeLost" && !item["status"]["conditions"].nil?
-    #       item["status"]["conditions"].each do |condition|
-    #         if condition["type"] == "Ready" && condition["status"] == "False"
-    #           podReadyCondition = false
-    #           break
-    #         end
-    #       end
-    #     end
-    #     if podReadyCondition == false
-    #       record["PodStatus"] = "Unknown"
-    #     elsif !item["metadata"]["deletionTimestamp"].nil? && !item["metadata"]["deletionTimestamp"].empty?
-    #       record["PodStatus"] = Constants::POD_STATUS_TERMINATING
-    #     else
-    #       record["PodStatus"] = item["status"]["phase"]
-    #     end
-    #     # For unscheduled (non-started) pods podIP does NOT exist
-    #     if !item["status"]["podIP"].nil?
-    #       record["PodIp"] = item["status"]["podIP"]
-    #     else
-    #       record["PodIp"] = ""
-    #     end
-
-    #     record["Computer"] = nodeName
-    #     record["ClusterId"] = KubernetesApiClient.getClusterId
-    #     record["ClusterName"] = KubernetesApiClient.getClusterName
-    #     #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
-    #     record["ServiceName"] = getServiceNameFromLabels(item["metadata"]["namespace"], item["metadata"]["labels"], serviceRecords)
-
-    #     if !item["metadata"]["ownerReferences"].nil?
-    #       record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
-    #       record["ControllerName"] = item["metadata"]["ownerReferences"][0]["name"]
-    #       # @controllerSet.add(record["ControllerKind"] + record["ControllerName"])
-    #       # Adding controller kind to telemetry ro information about customer workload
-    #       # if (@controllerData[record["ControllerKind"]].nil?)
-    #       #   @controllerData[record["ControllerKind"]] = 1
-    #       # else
-    #       #   controllerValue = @controllerData[record["ControllerKind"]]
-    #       #   @controllerData[record["ControllerKind"]] += 1
-    #       # end
-    #     end
-
-    #     podRestartCount = 0
-    #     record["PodRestartCount"] = 0
-
-    #     #TODO: popular real values for container fields
-    #     record["ContainerID"] = ""
-    #     record["ContainerName"] = ""
-    #     record["ContainerRestartCount"] = 0
-    #     record["ContainerRestartReason"] = ""
-    #     record["ContainerStatus"] = ""
-    #     record["ContainerCreationTimeStamp"] = Time.now.utc.iso8601
-    #     record["ContainerLastStatus"] = Hash.new
-
-    #     record["NoticeType"] = notice["type"]
-      
-    #   rescue => exception
-    #     puts "getNoticeRecord failed: #{exception.backtrace}"
-    #   end
-    #   return record
-    # end
-
     def watch
       loop do
         enumerate
@@ -353,34 +257,6 @@ module Fluent::Plugin
         podInventory = nil
         # TODO: commenting next line for watch
         # @serviceRecords = nil
-
-        # Adding telemetry to send pod telemetry every 5 minutes
-        timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
-        timeDifferenceInMinutes = timeDifference / 60
-        if (timeDifferenceInMinutes >= 5)
-          telemetryFlush = true
-        end
-
-        # Flush AppInsights telemetry once all the processing is done
-        if telemetryFlush == true
-          telemetryProperties = {}
-          telemetryProperties["Computer"] = @@hostName
-          telemetryProperties["PODS_CHUNK_SIZE"] = @PODS_CHUNK_SIZE
-          telemetryProperties["PODS_EMIT_STREAM_BATCH_SIZE"] = @PODS_EMIT_STREAM_BATCH_SIZE
-          telemetryProperties["WatchRestartCount"] = @watchRestartCount
-          ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
-          ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
-          ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
-          telemetryProperties["ControllerData"] = @controllerData.to_json
-          ApplicationInsightsUtility.sendMetricTelemetry("ControllerCount", @controllerSet.length, telemetryProperties)
-          if @winContainerCount > 0
-            telemetryProperties["ClusterWideWindowsContainersCount"] = @winContainerCount
-            ApplicationInsightsUtility.sendCustomEvent("WindowsContainerInventoryEvent", telemetryProperties)
-          end
-          ApplicationInsightsUtility.sendMetricTelemetry("PodInventoryE2EProcessingLatencyMs", @podInventoryE2EProcessingLatencyMs, telemetryProperties)
-          ApplicationInsightsUtility.sendMetricTelemetry("PodsAPIE2ELatencyMs", @podsAPIE2ELatencyMs, telemetryProperties)
-          @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
-        end
       rescue => errorStr
         $log.warn "in_kube_podinventory::enumerate:Failed in enumerate: #{errorStr}"
         $log.debug_backtrace(errorStr.backtrace)
@@ -628,42 +504,82 @@ module Fluent::Plugin
     end
 
     def merge_updates
-      $log.info("in_kube_podinventory::merge_updates: number of updates in notice hash #{@noticeHash.size} @#{Time.now.utc.iso8601}")
-      uidList = []
+      begin
+        $log.info("in_kube_podinventory::merge_updates: number of updates in notice hash #{@noticeHash.size} @#{Time.now.utc.iso8601}")
+        telemetryFlush = false
+        currentTime = Time.now
+        batchTime = currentTime.utc.iso8601
+        uidList = []
 
-      @mutex.synchronize {
-        @noticeHash.each do |uid, record|
-          uidList.append(uid)
-          case record["NoticeType"]
-          when "ADDED"
-            @podInventoryHash[uid] = record
-          when "MODIFIED"
-            if @podInventoryHash[uid].nil?
+        @mutex.synchronize {
+          @noticeHash.each do |uid, record|
+            uidList.append(uid)
+            case record["NoticeType"]
+            when "ADDED"
               @podInventoryHash[uid] = record
+            when "MODIFIED"
+              if @podInventoryHash[uid].nil?
+                @podInventoryHash[uid] = record
+              else
+                # TODO: remove below log statement later
+                $log.info("in_kube_podinventory::merge_updates : pure modify case")
+                @podInventoryHash[uid] = record
+              end
+            when "DELETED"
+              if @podInventoryHash.key?(uid)
+                @podInventoryHash.delete(uid)
+              else
+                $log.info("in_kube_podinventory::merge_updates: key did not exist in hash so unable to delete.")
+              end
+            when "BOOKMARK"
+              $log.info("in_kube_podinventory::merge_updates: received a BOOKMARK event.")
             else
-              $log.info("in_kube_podinventory::merge_updates : pure modify case")
-              @podInventoryHash[uid] = record
+              $log.info("in_kube_podinventory::merge_updates: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
             end
-          when "DELETED"
-            if @podInventoryHash.key?(uid)
-              @podInventoryHash.delete(uid)
-            else
-              $log.info("in_kube_podinventory::merge_updates: key did not exist in hash so unable to delete.")
-            end
-          when "BOOKMARK"
-            $log.info("in_kube_podinventory::merge_updates: received a BOOKMARK event.")
-          else
-            $log.info("in_kube_podinventory::merge_updates: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
           end
+
+          # remove all looked at uids from the noticeHash
+          uidList.each do |uid|
+            @noticeHash.delete(uid)
+          end
+          # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
+        }
+        parse_and_emit_merge_updates(@podInventoryHash)
+
+        # Adding telemetry to send pod telemetry every 5 minutes
+        timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
+        timeDifferenceInMinutes = timeDifference / 60
+        if (timeDifferenceInMinutes >= 5)
+          telemetryFlush = true
         end
 
-        # remove all looked at uids from the noticeHash
-        uidList.each do |uid|
-          @noticeHash.delete(uid)
+        # Flush AppInsights telemetry once all the processing is done
+        if telemetryFlush == true
+          telemetryProperties = {}
+          telemetryProperties["Computer"] = @@hostName
+          telemetryProperties["PODS_CHUNK_SIZE"] = @PODS_CHUNK_SIZE
+          telemetryProperties["PODS_EMIT_STREAM_BATCH_SIZE"] = @PODS_EMIT_STREAM_BATCH_SIZE
+          telemetryProperties["WatchRestartCount"] = @watchRestartCount
+          # reset watchRestartCount
+          @watchRestartCount = 0
+          ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
+          ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
+          ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
+          telemetryProperties["ControllerData"] = @controllerData.to_json
+          ApplicationInsightsUtility.sendMetricTelemetry("ControllerCount", @controllerSet.length, telemetryProperties)
+          if @winContainerCount > 0
+            telemetryProperties["ClusterWideWindowsContainersCount"] = @winContainerCount
+            ApplicationInsightsUtility.sendCustomEvent("WindowsContainerInventoryEvent", telemetryProperties)
+          end
+          ApplicationInsightsUtility.sendMetricTelemetry("PodInventoryE2EProcessingLatencyMs", @podInventoryE2EProcessingLatencyMs, telemetryProperties)
+          ApplicationInsightsUtility.sendMetricTelemetry("PodsAPIE2ELatencyMs", @podsAPIE2ELatencyMs, telemetryProperties)
+          @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
         end
-        # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
-      }
-      parse_and_emit_merge_updates(@podInventoryHash)
+      rescue => errorStr
+        $log.warn "in_kube_podinventory::merge_updates:Failed in merge_updates: #{errorStr}"
+        $log.debug_backtrace(errorStr.backtrace)
+        ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
+      end
     end
 
     def run_periodic
