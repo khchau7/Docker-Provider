@@ -239,23 +239,24 @@ module Fluent::Plugin
     def watch
       loop do
         enumerate
-        # serviceRecords = @serviceRecords
+        serviceRecords = @serviceRecords
         begin
-          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, allowWatchBookmarks: true, as: :parsed)
+          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, as: :parsed)
           @Watcher.each do |notice|
             $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
-            # if type error then break -- look at sample code
             if notice["type"] == "ERROR"
               $log.info("in_kube_podinventory::watch : notice type was error. restarting watch.")
               break
             end
             if !notice.nil? && !notice.empty? 
+              $log.info("in_kube_podinventory::watch : notice was not null and not empty.")
               item = notice["object"]
               batchTime = Time.now.utc.iso8601
               # Construct record with necessary fields (same fields as getPodInventoryRecords)
-              # record = getNoticeRecord(notice, serviceRecords)
-              record = getPodInventoryRecords(item, @serviceRecords, batchTime)
-              # $log.info("in_kube_podinventory::watch : record looks like: #{record}")
+              records = getPodInventoryRecords(item, serviceRecords, batchTime)
+              record = records.first()
+              record["NoticeType"] = notice["type"]
+              $log.info("in_kube_podinventory::watch : record looks like: #{record}")
               @mutex.synchronize {
                 @noticeHash[item["metadata"]["uid"]] = record
               }
@@ -688,7 +689,7 @@ module Fluent::Plugin
             merge_updates
             $log.info("in_kube_podinventory::run_periodic.merge_updates.end #{Time.now.utc.iso8601}")
           rescue => errorStr
-            $log.warn "in_kube_podinventory::run_periodic: enumerate Failed to retrieve pod inventory: #{errorStr}"
+            $log.warn "in_kube_podinventory::run_periodic: merge_updates Failed to retrieve pod inventory: #{errorStr}"
             ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
           end
         end
