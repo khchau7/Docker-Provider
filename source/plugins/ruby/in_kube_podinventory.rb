@@ -120,7 +120,7 @@ module Fluent::Plugin
       end
     end
 
-    def populate_hash(podInventory)
+    def populate_podinventory_cache(podInventory)
       batchTime = Time.now.utc.iso8601
       serviceRecords = @serviceRecords
       begin
@@ -135,120 +135,127 @@ module Fluent::Plugin
           end
         end
       rescue => exception
-        $log.info("in_kube_podinventory::populate_hash : populating podInventoryHash failed.")
+        $log.info("in_kube_podinventory::populate_podinventory_cache : populating podInventoryHash failed.")
         $log.debug_backtrace(exception.backtrace)
       end
     end
 
-    def getNoticeRecord(notice, serviceRecords)
-      # Helper function that extracts necessary fields from notice JSON
-      record = {}
-      item = notice["object"]
-      #TODO: check assumption that batch time can be current time (CollectionTime)
-      batchTime = Time.now.utc.iso8601
+    # def getNoticeRecord(notice, serviceRecords)
+    #   # Helper function that extracts necessary fields from notice JSON
+    #   record = {}
+    #   item = notice["object"]
+    #   #TODO: check assumption that batch time can be current time (CollectionTime)
+    #   batchTime = Time.now.utc.iso8601
   
-      begin
-        record["CollectionTime"] = batchTime
-        record["Name"] = item["metadata"]["name"]
-        podNameSpace = item["metadata"]["namespace"]
-        #TODO: change uid later, handle case of horizontal scaling of pods but no controller (explained in getPodUid in KubenetesApiClient)
-        podUid = item["metadata"]["uid"]
-        # podUid = KubenetesApiClient.getPodUid(podNameSpace, item["metadata"])
+    #   begin
+    #     record["CollectionTime"] = batchTime
+    #     record["Name"] = item["metadata"]["name"]
+    #     podNameSpace = item["metadata"]["namespace"]
+    #     #TODO: change uid later, handle case of horizontal scaling of pods but no controller (explained in getPodUid in KubenetesApiClient)
+    #     podUid = item["metadata"]["uid"]
+    #     # podUid = KubenetesApiClient.getPodUid(podNameSpace, item["metadata"])
 
-        nodeName = ""
-        # For unscheduled (non-started) pods nodeName does NOT exist
-        if !item["spec"]["nodeName"].nil?
-          nodeName = item["spec"]["nodeName"]
-        end
+    #     nodeName = ""
+    #     # For unscheduled (non-started) pods nodeName does NOT exist
+    #     if !item["spec"]["nodeName"].nil?
+    #       nodeName = item["spec"]["nodeName"]
+    #     end
 
-        record["PodUid"] = podUid
-        record["PodLabel"] = [item["metadata"]["labels"]]
-        record["Namespace"] = podNameSpace
-        record["PodCreationTimeStamp"] = item["metadata"]["creationTimestamp"]
+    #     record["PodUid"] = podUid
+    #     record["PodLabel"] = [item["metadata"]["labels"]]
+    #     record["Namespace"] = podNameSpace
+    #     record["PodCreationTimeStamp"] = item["metadata"]["creationTimestamp"]
 
-        if !item["status"]["startTime"].nil?
-          record["PodStartTime"] = item["status"]["startTime"]
-        else
-          record["PodStartTime"] = ""
-        end
+    #     if !item["status"]["startTime"].nil?
+    #       record["PodStartTime"] = item["status"]["startTime"]
+    #     else
+    #       record["PodStartTime"] = ""
+    #     end
 
-        #podStatus
-        # NodeLost scenario -- pod(s) in the lost node is still being reported as running
-        podReadyCondition = true 
-        if !item["status"]["reason"].nil? && item["status"]["reason"] == "NodeLost" && !item["status"]["conditions"].nil?
-          item["status"]["conditions"].each do |condition|
-            if condition["type"] == "Ready" && condition["status"] == "False"
-              podReadyCondition = false
-              break
-            end
-          end
-        end
-        if podReadyCondition == false
-          record["PodStatus"] = "Unknown"
-        elsif !item["metadata"]["deletionTimestamp"].nil? && !item["metadata"]["deletionTimestamp"].empty?
-          record["PodStatus"] = Constants::POD_STATUS_TERMINATING
-        else
-          record["PodStatus"] = item["status"]["phase"]
-        end
+    #     #podStatus
+    #     # NodeLost scenario -- pod(s) in the lost node is still being reported as running
+    #     podReadyCondition = true 
+    #     if !item["status"]["reason"].nil? && item["status"]["reason"] == "NodeLost" && !item["status"]["conditions"].nil?
+    #       item["status"]["conditions"].each do |condition|
+    #         if condition["type"] == "Ready" && condition["status"] == "False"
+    #           podReadyCondition = false
+    #           break
+    #         end
+    #       end
+    #     end
+    #     if podReadyCondition == false
+    #       record["PodStatus"] = "Unknown"
+    #     elsif !item["metadata"]["deletionTimestamp"].nil? && !item["metadata"]["deletionTimestamp"].empty?
+    #       record["PodStatus"] = Constants::POD_STATUS_TERMINATING
+    #     else
+    #       record["PodStatus"] = item["status"]["phase"]
+    #     end
+    #     # For unscheduled (non-started) pods podIP does NOT exist
+    #     if !item["status"]["podIP"].nil?
+    #       record["PodIp"] = item["status"]["podIP"]
+    #     else
+    #       record["PodIp"] = ""
+    #     end
 
-        # For unscheduled (non-started) pods podIP does NOT exist
-        if !item["status"]["podIP"].nil?
-          record["PodIp"] = item["status"]["podIP"]
-        else
-          record["PodIp"] = ""
-        end
+    #     record["Computer"] = nodeName
+    #     record["ClusterId"] = KubernetesApiClient.getClusterId
+    #     record["ClusterName"] = KubernetesApiClient.getClusterName
+    #     #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
+    #     record["ServiceName"] = getServiceNameFromLabels(item["metadata"]["namespace"], item["metadata"]["labels"], serviceRecords)
 
-        record["Computer"] = nodeName
-        record["ClusterId"] = KubernetesApiClient.getClusterId
-        record["ClusterName"] = KubernetesApiClient.getClusterName
-        #TODO: make a call to getServiceNameFromLabels -- need to pass in serviceRecords for this
-        record["ServiceName"] = getServiceNameFromLabels(item["metadata"]["namespace"], item["metadata"]["labels"], serviceRecords)
+    #     if !item["metadata"]["ownerReferences"].nil?
+    #       record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
+    #       record["ControllerName"] = item["metadata"]["ownerReferences"][0]["name"]
+    #       # @controllerSet.add(record["ControllerKind"] + record["ControllerName"])
+    #       # Adding controller kind to telemetry ro information about customer workload
+    #       # if (@controllerData[record["ControllerKind"]].nil?)
+    #       #   @controllerData[record["ControllerKind"]] = 1
+    #       # else
+    #       #   controllerValue = @controllerData[record["ControllerKind"]]
+    #       #   @controllerData[record["ControllerKind"]] += 1
+    #       # end
+    #     end
 
-        if !item["metadata"]["ownerReferences"].nil?
-          record["ControllerKind"] = item["metadata"]["ownerReferences"][0]["kind"]
-          record["ControllerName"] = item["metadata"]["ownerReferences"][0]["name"]
-          # @controllerSet.add(record["ControllerKind"] + record["ControllerName"])
-          # Adding controller kind to telemetry ro information about customer workload
-          # if (@controllerData[record["ControllerKind"]].nil?)
-          #   @controllerData[record["ControllerKind"]] = 1
-          # else
-          #   controllerValue = @controllerData[record["ControllerKind"]]
-          #   @controllerData[record["ControllerKind"]] += 1
-          # end
-        end
+    #     podRestartCount = 0
+    #     record["PodRestartCount"] = 0
 
-        podRestartCount = 0
-        record["PodRestartCount"] = 0
+    #     #TODO: popular real values for container fields
+    #     record["ContainerID"] = ""
+    #     record["ContainerName"] = ""
+    #     record["ContainerRestartCount"] = 0
+    #     record["ContainerRestartReason"] = ""
+    #     record["ContainerStatus"] = ""
+    #     record["ContainerCreationTimeStamp"] = Time.now.utc.iso8601
+    #     record["ContainerLastStatus"] = Hash.new
 
-        #TODO: popular real values for container fields
-        record["ContainerID"] = ""
-        record["ContainerName"] = ""
-        record["ContainerRestartCount"] = 0
-        record["ContainerRestartReason"] = ""
-        record["ContainerStatus"] = ""
-        record["ContainerCreationTimeStamp"] = Time.now.utc.iso8601
-        record["ContainerLastStatus"] = Hash.new
-
-        record["NoticeType"] = notice["type"]
+    #     record["NoticeType"] = notice["type"]
       
-      rescue => exception
-        puts "getNoticeRecord failed: #{exception.backtrace}"
-      end
-      return record
-    end
+    #   rescue => exception
+    #     puts "getNoticeRecord failed: #{exception.backtrace}"
+    #   end
+    #   return record
+    # end
 
     def watch
       loop do
         enumerate
-        serviceRecords = @serviceRecords
+        # serviceRecords = @serviceRecords
         begin
           @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, allowWatchBookmarks: true, as: :parsed)
           @Watcher.each do |notice|
             $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
-            if !notice.nil? && !notice.empty?
+            # if type error then break -- look at sample code
+            if notice["type"] == "ERROR"
+              $log.info("in_kube_podinventory::watch : notice type was error. restarting watch.")
+              break
+            end
+            if !notice.nil? && !notice.empty? 
               item = notice["object"]
+              batchTime = Time.now.utc.iso8601
               # Construct record with necessary fields (same fields as getPodInventoryRecords)
-              record = getNoticeRecord(notice, serviceRecords)
+              # record = getNoticeRecord(notice, serviceRecords)
+              record = getPodInventoryRecords(item, @serviceRecords, batchTime)
+              # $log.info("in_kube_podinventory::watch : record looks like: #{record}")
               @mutex.synchronize {
                 @noticeHash[item["metadata"]["uid"]] = record
               }
@@ -304,14 +311,16 @@ module Fluent::Plugin
         continuationToken = nil
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
-        @collection_version = podInventory["metadata"]["resourceVersion"]
+        if !podInventory["metadata"].nil? && !podInventory["metadata"].empty? && !podInventory["metadata"]["resourceVersion"].nil? && !podInventory["metadata"]["resourceVersion"].empty?
+          @collection_version = podInventory["metadata"]["resourceVersion"]
+        end
         $log.info("in_kube_podinventory::enumerate : Received collection version: #{@collection_version}")
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
         if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
           $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length}  from Kube API @ #{Time.now.utc.iso8601}")
-          populate_hash(podInventory)
+          populate_podinventory_cache(podInventory)
           parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
         else
           $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
@@ -323,13 +332,15 @@ module Fluent::Plugin
           podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
           continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}&continue=#{continuationToken}")
           # need to add collection resource version here
-          @collection_version = podInventory["metadata"]["resourceVersion"]
+          if !podInventory["metadata"].nil? && !podInventory["metadata"].empty? && !podInventory["metadata"]["resourceVersion"].nil? && !podInventory["metadata"]["resourceVersion"].empty?
+            @collection_version = podInventory["metadata"]["resourceVersion"]
+          end
           $log.info("in_kube_podinventory::enumerate : continuation token was not null. received collection version: #{@collection_version}")
           podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
           @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
           if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
             $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-            populate_hash(podInventory)
+            populate_podinventory_cache(podInventory)
             parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
           else
             $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
@@ -339,7 +350,8 @@ module Fluent::Plugin
         @podInventoryE2EProcessingLatencyMs = ((Time.now.to_f * 1000).to_i - podInventoryStartTime)
         # Setting these to nil so that we dont hold memory until GC kicks in
         podInventory = nil
-        @serviceRecords = nil
+        # TODO: commenting next line for watch
+        # @serviceRecords = nil
 
         # Adding telemetry to send pod telemetry every 5 minutes
         timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
