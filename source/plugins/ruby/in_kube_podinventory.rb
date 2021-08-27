@@ -148,19 +148,19 @@ module Fluent::Plugin
           @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, as: :parsed)
           @Watcher.each do |notice|
             $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
-            if notice["type"] == "ERROR"
-              $log.info("in_kube_podinventory::watch : notice type was error. restarting watch.")
-              break
-            end
             if !notice.nil? && !notice.empty? 
               $log.info("in_kube_podinventory::watch : notice was not null and not empty.")
+              if notice["type"] == "ERROR"
+                $log.info("in_kube_podinventory::watch : notice type was error. restarting watch.")
+                break
+              end
               item = notice["object"]
               batchTime = Time.now.utc.iso8601
               # Construct record with necessary fields (same fields as getPodInventoryRecords)
               records = getPodInventoryRecords(item, serviceRecords, batchTime)
               record = records.first()
               record["NoticeType"] = notice["type"]
-              $log.info("in_kube_podinventory::watch : record looks like: #{record}")
+              # $log.info("in_kube_podinventory::watch : record looks like: #{record}")
               @mutex.synchronize {
                 @noticeHash[item["metadata"]["uid"]] = record
               }
@@ -189,7 +189,8 @@ module Fluent::Plugin
         batchTime = currentTime.utc.iso8601
         @serviceRecords = []
         @podInventoryE2EProcessingLatencyMs = 0
-        podInventoryStartTime = (Time.now.to_f * 1000).to_i            
+        podInventoryStartTime = (Time.now.to_f * 1000).to_i
+        @podInventoryHash = {}
 
         # Get services first so that we dont need to make a call for very chunk
         $log.info("in_kube_podinventory::enumerate : Getting services from Kube API @ #{Time.now.utc.iso8601}")
@@ -482,6 +483,8 @@ module Fluent::Plugin
           end
           router.emit_stream(@tag, eventStream) if eventStream
           emittedPodCount += eventStream.count
+          # Updating value for AppInsights telemetry
+          @podCount += emittedPodCount
           eventStream = Fluent::MultiEventStream.new
         end
 
@@ -492,6 +495,8 @@ module Fluent::Plugin
             $log.info("kubePodInventoryEmitStreamSuccess @ #{Time.now.utc.iso8601}")
           end
           emittedPodCount += eventStream.count
+          # Updating value for AppInsights telemetry
+          @podCount += emittedPodCount
           eventStream = nil
         end
 
@@ -511,7 +516,26 @@ module Fluent::Plugin
         batchTime = currentTime.utc.iso8601
         uidList = []
 
+        # Get services first so that we dont need to make a call for very chunk
+        $log.info("in_kube_podinventory::enumerate : Getting services from Kube API @ #{Time.now.utc.iso8601}")
+        serviceInfo = KubernetesApiClient.getKubeResourceInfo("services")
+        # serviceList = JSON.parse(KubernetesApiClient.getKubeResourceInfo("services").body)
+        $log.info("in_kube_podinventory::enumerate : Done getting services from Kube API @ #{Time.now.utc.iso8601}")
+
+        if !serviceInfo.nil?
+          $log.info("in_kube_podinventory::enumerate:Start:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
+          serviceList = Yajl::Parser.parse(StringIO.new(serviceInfo.body))
+          $log.info("in_kube_podinventory::enumerate:End:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
+          serviceInfo = nil
+          # service inventory records much smaller and fixed size compared to serviceList
+          @serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
+          # updating for telemetry
+          @serviceCount += @serviceRecords.length
+          serviceList = nil
+        end
+
         @mutex.synchronize {
+          noticeHashLockStartTime = (Time.now.to_f * 1000).to_i 
           @noticeHash.each do |uid, record|
             uidList.append(uid)
             case record["NoticeType"]
@@ -543,6 +567,10 @@ module Fluent::Plugin
             @noticeHash.delete(uid)
           end
           # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
+
+          noticeHashLockTotalTime = ((Time.now.to_f * 1000).to_i - noticeHashLockStartTime)
+          $log.info("in_kube_podinventory::merge_updates : notice hash lock total time = #{noticeHashLockTotalTime}")
+          $log.info("in_kube_podinventory::merge_updates : number of pods in @podInventoryHash = #{@podInventoryHash.size}, size = ")
         }
         parse_and_emit_merge_updates(@podInventoryHash)
 
@@ -564,6 +592,8 @@ module Fluent::Plugin
           @watchRestartCount = 0
           ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
           ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
+          # TODO: fix serviceCount => cant get actual value unless we watch for it or call it every minute
+          #     get service count in merge_updates so it happens every minute
           ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
           telemetryProperties["ControllerData"] = @controllerData.to_json
           ApplicationInsightsUtility.sendMetricTelemetry("ControllerCount", @controllerSet.length, telemetryProperties)
