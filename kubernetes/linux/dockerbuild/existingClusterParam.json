@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "aksResourceId": {
+      "value": "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/khushi-watch-test/providers/Microsoft.ContainerService/managedClusters/khushi-watch-test"
+    },
+    "aksResourceLocation": {
+      "value": "West US 2"
+    },
+    "workspaceResourceId": {
+      "value": "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/defaultresourcegroup-scus/providers/microsoft.operationalinsights/workspaces/defaultworkspace-b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188-scus"
+    }
+  }
+}

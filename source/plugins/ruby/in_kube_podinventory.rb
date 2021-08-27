@@ -3,6 +3,7 @@
 
 require 'fluent/plugin/input'
 
+
 module Fluent::Plugin
   require_relative "podinventory_to_mdm"
 
@@ -20,6 +21,8 @@ module Fluent::Plugin
       require "yajl"
       require "set"
       require "time"
+      require "kubeclient"
+      require "mmap/mmap"
 
       require_relative "kubernetes_container_inventory"
       require_relative "KubernetesApiClient"
@@ -33,6 +36,8 @@ module Fluent::Plugin
       @PODS_CHUNK_SIZE = 0
       @PODS_EMIT_STREAM_BATCH_SIZE = 0
 
+      @watchRestartCount = 0
+
       @podCount = 0
       @serviceCount = 0
       @controllerSet = Set.new []
@@ -40,7 +45,11 @@ module Fluent::Plugin
       @controllerData = {}
       @podInventoryE2EProcessingLatencyMs = 0
       @podsAPIE2ELatencyMs = 0    
-      
+
+      @noticeHash = {}
+      @collection_version = ""
+      @podInventoryHash = {}
+
       @kubeperfTag = "oneagent.containerInsights.LINUX_PERF_BLOB"
       @kubeservicesTag = "oneagent.containerInsights.KUBE_SERVICES_BLOB"
       @containerInventoryTag = "oneagent.containerInsights.CONTAINER_INVENTORY_BLOB"
@@ -74,12 +83,28 @@ module Fluent::Plugin
           $log.warn("in_kube_podinventory::start: setting to default value since got PODS_EMIT_STREAM_BATCH_SIZE nil or empty")
           @PODS_EMIT_STREAM_BATCH_SIZE = 200
         end
+        
+        # create kubernetes watch client
+        ssl_options = {
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+          verify_ssl: OpenSSL::SSL::VERIFY_PEER,
+        }
+        timeouts = {
+          open: 60,  # default setting (in seconds)
+          read: nil  # read never times out
+        }
+        getTokenStr = "Bearer " + KubernetesApiClient.getTokenStr
+        auth_options = { bearer_token: KubernetesApiClient.getTokenStr }
+        @KubernetesWatchClient = Kubeclient::Client.new("https://#{ENV["KUBERNETES_SERVICE_HOST"]}:#{ENV["KUBERNETES_PORT_443_TCP_PORT"]}/api/", "v1", ssl_options: ssl_options, auth_options: auth_options, as: :parsed, timeouts: timeouts)
+        @Watcher = nil
         $log.info("in_kube_podinventory::start: PODS_EMIT_STREAM_BATCH_SIZE  @ #{@PODS_EMIT_STREAM_BATCH_SIZE}")
         @finished = false
         @condition = ConditionVariable.new
         @mutex = Mutex.new
-        @thread = Thread.new(&method(:run_periodic))
+        @watchthread = Thread.new(&method(:watch))
+        @runthread = Thread.new(&method(:run_periodic))
         @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
+        @@WatcherTimeTracker = DateTime.now.to_time.to_i
       end
     end
 
@@ -89,8 +114,65 @@ module Fluent::Plugin
           @finished = true
           @condition.signal
         }
-        @thread.join
+        @watchthread.join
+        @runthread.join
         super # This super must be at the end of shutdown method
+      end
+    end
+
+    def populate_podinventory_cache(podInventory)
+      batchTime = Time.now.utc.iso8601
+      serviceRecords = @serviceRecords
+      begin
+        if !podInventory["items"].nil? && !podInventory["items"].empty?
+          podInventory["items"].each do |item|
+            # Extract needed fields using getPodInventoryRecords and create a hash mapping uid -> record 
+            podInventoryRecords = getPodInventoryRecords(item, serviceRecords, batchTime)
+            podInventoryRecords.each { |record|
+              uid = record["PodUid"]
+              @podInventoryHash[uid] = record
+            }
+          end
+        end
+      rescue => exception
+        $log.info("in_kube_podinventory::populate_podinventory_cache : populating podInventoryHash failed.")
+        $log.debug_backtrace(exception.backtrace)
+      end
+    end
+
+    def watch
+      loop do
+        enumerate
+        serviceRecords = @serviceRecords
+        begin
+          @Watcher = @KubernetesWatchClient.watch_pods(resource_version: @collection_version, timeoutSeconds: 300, as: :parsed)
+          @Watcher.each do |notice|
+            $log.info("in_kube_podinventory::watch : inside watch pods! collection version: #{@collection_version}.")
+            if !notice.nil? && !notice.empty? 
+              $log.info("in_kube_podinventory::watch : notice was not null and not empty.")
+              if notice["type"] == "ERROR"
+                $log.info("in_kube_podinventory::watch : notice type was error. restarting watch.")
+                break
+              end
+              item = notice["object"]
+              batchTime = Time.now.utc.iso8601
+              # Construct record with necessary fields (same fields as getPodInventoryRecords)
+              records = getPodInventoryRecords(item, serviceRecords, batchTime)
+              record = records.first()
+              record["NoticeType"] = notice["type"]
+              # $log.info("in_kube_podinventory::watch : record looks like: #{record}")
+              @mutex.synchronize {
+                @noticeHash[item["metadata"]["uid"]] = record
+              }
+              $log.info("in_kube_podinventory::watch : number of items in noticeHash = #{@noticeHash.size}")
+            end
+          end
+        rescue => exception
+            $log.warn("in_kube_podinventory::watch : watch events session got broken and re-establishing the session.")
+            $log.debug_backtrace(exception.backtrace)
+        end
+        sleep 1
+        @watchRestartCount += 1
       end
     end
 
@@ -105,9 +187,10 @@ module Fluent::Plugin
         @controllerData = {}
         currentTime = Time.now
         batchTime = currentTime.utc.iso8601
-        serviceRecords = []
+        @serviceRecords = []
         @podInventoryE2EProcessingLatencyMs = 0
-        podInventoryStartTime = (Time.now.to_f * 1000).to_i            
+        podInventoryStartTime = (Time.now.to_f * 1000).to_i
+        @podInventoryHash = {}
 
         # Get services first so that we dont need to make a call for very chunk
         $log.info("in_kube_podinventory::enumerate : Getting services from Kube API @ #{Time.now.utc.iso8601}")
@@ -121,9 +204,9 @@ module Fluent::Plugin
           $log.info("in_kube_podinventory::enumerate:End:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
           serviceInfo = nil
           # service inventory records much smaller and fixed size compared to serviceList
-          serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
+          @serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
           # updating for telemetry
-          @serviceCount += serviceRecords.length
+          @serviceCount += @serviceRecords.length
           serviceList = nil
         end
 
@@ -134,25 +217,37 @@ module Fluent::Plugin
         continuationToken = nil
         $log.info("in_kube_podinventory::enumerate : Getting pods from Kube API @ #{Time.now.utc.iso8601}")
         continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}")
+        if !podInventory["metadata"].nil? && !podInventory["metadata"].empty? && !podInventory["metadata"]["resourceVersion"].nil? && !podInventory["metadata"]["resourceVersion"].empty?
+          @collection_version = podInventory["metadata"]["resourceVersion"]
+        end
+        $log.info("in_kube_podinventory::enumerate : Received collection version: #{@collection_version}")
         $log.info("in_kube_podinventory::enumerate : Done getting pods from Kube API @ #{Time.now.utc.iso8601}")
         podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
         @podsAPIE2ELatencyMs = (podsAPIChunkEndTime - podsAPIChunkStartTime)
         if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
           $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length}  from Kube API @ #{Time.now.utc.iso8601}")
-          parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
+          populate_podinventory_cache(podInventory)
+          parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
         else
           $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
         end
 
         #If we receive a continuation token, make calls, process and flush data until we have processed all data
         while (!continuationToken.nil? && !continuationToken.empty?)
+          $log.info("in_kube_podinventory::enumerate : continuation token is not null and not empty")
           podsAPIChunkStartTime = (Time.now.to_f * 1000).to_i
           continuationToken, podInventory = KubernetesApiClient.getResourcesAndContinuationToken("pods?limit=#{@PODS_CHUNK_SIZE}&continue=#{continuationToken}")
+          # need to add collection resource version here
+          if !podInventory["metadata"].nil? && !podInventory["metadata"].empty? && !podInventory["metadata"]["resourceVersion"].nil? && !podInventory["metadata"]["resourceVersion"].empty?
+            @collection_version = podInventory["metadata"]["resourceVersion"]
+          end
+          $log.info("in_kube_podinventory::enumerate : continuation token was not null. received collection version: #{@collection_version}")
           podsAPIChunkEndTime = (Time.now.to_f * 1000).to_i
           @podsAPIE2ELatencyMs = @podsAPIE2ELatencyMs + (podsAPIChunkEndTime - podsAPIChunkStartTime)
           if (!podInventory.nil? && !podInventory.empty? && podInventory.key?("items") && !podInventory["items"].nil? && !podInventory["items"].empty?)
             $log.info("in_kube_podinventory::enumerate : number of pod items :#{podInventory["items"].length} from Kube API @ #{Time.now.utc.iso8601}")
-            parse_and_emit_records(podInventory, serviceRecords, continuationToken, batchTime)
+            populate_podinventory_cache(podInventory)
+            parse_and_emit_records(podInventory, @serviceRecords, continuationToken, batchTime)
           else
             $log.warn "in_kube_podinventory::enumerate:Received empty podInventory"
           end
@@ -161,34 +256,8 @@ module Fluent::Plugin
         @podInventoryE2EProcessingLatencyMs = ((Time.now.to_f * 1000).to_i - podInventoryStartTime)
         # Setting these to nil so that we dont hold memory until GC kicks in
         podInventory = nil
-        serviceRecords = nil
-
-        # Adding telemetry to send pod telemetry every 5 minutes
-        timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
-        timeDifferenceInMinutes = timeDifference / 60
-        if (timeDifferenceInMinutes >= 5)
-          telemetryFlush = true
-        end
-
-        # Flush AppInsights telemetry once all the processing is done
-        if telemetryFlush == true
-          telemetryProperties = {}
-          telemetryProperties["Computer"] = @@hostName
-          telemetryProperties["PODS_CHUNK_SIZE"] = @PODS_CHUNK_SIZE
-          telemetryProperties["PODS_EMIT_STREAM_BATCH_SIZE"] = @PODS_EMIT_STREAM_BATCH_SIZE
-          ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
-          ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
-          ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
-          telemetryProperties["ControllerData"] = @controllerData.to_json
-          ApplicationInsightsUtility.sendMetricTelemetry("ControllerCount", @controllerSet.length, telemetryProperties)
-          if @winContainerCount > 0
-            telemetryProperties["ClusterWideWindowsContainersCount"] = @winContainerCount
-            ApplicationInsightsUtility.sendCustomEvent("WindowsContainerInventoryEvent", telemetryProperties)
-          end
-          ApplicationInsightsUtility.sendMetricTelemetry("PodInventoryE2EProcessingLatencyMs", @podInventoryE2EProcessingLatencyMs, telemetryProperties)
-          ApplicationInsightsUtility.sendMetricTelemetry("PodsAPIE2ELatencyMs", @podsAPIE2ELatencyMs, telemetryProperties)
-          @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
-        end
+        # TODO: commenting next line for watch
+        # @serviceRecords = nil
       rescue => errorStr
         $log.warn "in_kube_podinventory::enumerate:Failed in enumerate: #{errorStr}"
         $log.debug_backtrace(errorStr.backtrace)
@@ -373,6 +442,176 @@ module Fluent::Plugin
       end #begin block end
     end
 
+    def parse_and_emit_merge_updates(podInventoryRecords)
+      currentTime = Time.now   
+      emitTime = Fluent::Engine.now  
+      batchTime = currentTime.utc.iso8601
+      eventStream = Fluent::MultiEventStream.new
+      containerInventoryStream = Fluent::MultiEventStream.new
+      kubePerfEventStream = Fluent::MultiEventStream.new
+      insightsMetricsEventStream = Fluent::MultiEventStream.new
+      @@istestvar = ENV["ISTEST"]
+
+      continuationToken = nil
+      emittedPodCount = 0
+
+      begin #begin block start
+        timeDifference = (DateTime.now.to_time.to_i - @@WatcherTimeTracker).abs
+        timeDifferenceInMinutes = timeDifference / 60
+        if (timeDifferenceInMinutes >= 5)
+          $log.info("parse_and_emit_merge_updates::resetting watcher to handle api server timeout :#{Time.now.utc.iso8601}")
+          @@WatcherTimeTracker = DateTime.now.to_time.to_i
+          if !@Watcher.nil?
+             @Watcher.finish
+          end
+        end
+
+        # Getting windows nodes from kubeapi
+        winNodes = KubernetesApiClient.getWindowsNodesArray
+        podInventoryRecords.each do |uid, record|
+          if !record.nil?
+            record["CollectionTime"] = batchTime
+            eventStream.add(emitTime, record) if record                                      
+            @inventoryToMdmConvertor.process_pod_inventory_record(record)            
+          end
+        end
+
+        if @PODS_EMIT_STREAM_BATCH_SIZE > 0 && eventStream.count >= @PODS_EMIT_STREAM_BATCH_SIZE
+          $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of pod inventory records emitted #{eventStream.count} @ #{Time.now.utc.iso8601}")
+          if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
+            $log.info("kubePodInventoryEmitStreamSuccess @ #{Time.now.utc.iso8601}")
+          end
+          router.emit_stream(@tag, eventStream) if eventStream
+          emittedPodCount += eventStream.count
+          # Updating value for AppInsights telemetry
+          @podCount += emittedPodCount
+          eventStream = Fluent::MultiEventStream.new
+        end
+
+        if eventStream.count > 0
+          $log.info("in_kube_podinventory::parse_and_emit_merge_updates: number of pod inventory records emitted #{eventStream.count} @ #{Time.now.utc.iso8601}")
+          router.emit_stream(@tag, eventStream) if eventStream
+          if (!@@istestvar.nil? && !@@istestvar.empty? && @@istestvar.casecmp("true") == 0)
+            $log.info("kubePodInventoryEmitStreamSuccess @ #{Time.now.utc.iso8601}")
+          end
+          emittedPodCount += eventStream.count
+          # Updating value for AppInsights telemetry
+          @podCount += emittedPodCount
+          eventStream = nil
+        end
+
+        $log.info("parse_and_emit_merge_updates:: emittedPodCount = #{emittedPodCount}")
+      rescue => errorStr
+        $log.warn "Failed in parse_and_emit_merge_updates pod inventory: #{errorStr}. backtrace: #{errorStr.backtrace}"
+        $log.debug_backtrace(errorStr.backtrace)
+        ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
+      end #begin block end
+    end
+
+    def merge_updates
+      begin
+        $log.info("in_kube_podinventory::merge_updates: number of updates in notice hash #{@noticeHash.size} @#{Time.now.utc.iso8601}")
+        telemetryFlush = false
+        currentTime = Time.now
+        batchTime = currentTime.utc.iso8601
+        uidList = []
+
+        # Get services first so that we dont need to make a call for very chunk
+        $log.info("in_kube_podinventory::enumerate : Getting services from Kube API @ #{Time.now.utc.iso8601}")
+        serviceInfo = KubernetesApiClient.getKubeResourceInfo("services")
+        # serviceList = JSON.parse(KubernetesApiClient.getKubeResourceInfo("services").body)
+        $log.info("in_kube_podinventory::enumerate : Done getting services from Kube API @ #{Time.now.utc.iso8601}")
+
+        if !serviceInfo.nil?
+          $log.info("in_kube_podinventory::enumerate:Start:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
+          serviceList = Yajl::Parser.parse(StringIO.new(serviceInfo.body))
+          $log.info("in_kube_podinventory::enumerate:End:Parsing services data using yajl @ #{Time.now.utc.iso8601}")
+          serviceInfo = nil
+          # service inventory records much smaller and fixed size compared to serviceList
+          @serviceRecords = KubernetesApiClient.getKubeServicesInventoryRecords(serviceList, batchTime)
+          # updating for telemetry
+          @serviceCount += @serviceRecords.length
+          serviceList = nil
+        end
+
+        @mutex.synchronize {
+          noticeHashLockStartTime = (Time.now.to_f * 1000).to_i 
+          @noticeHash.each do |uid, record|
+            uidList.append(uid)
+            case record["NoticeType"]
+            when "ADDED"
+              @podInventoryHash[uid] = record
+            when "MODIFIED"
+              if @podInventoryHash[uid].nil?
+                @podInventoryHash[uid] = record
+              else
+                # TODO: remove below log statement later
+                $log.info("in_kube_podinventory::merge_updates : pure modify case")
+                @podInventoryHash[uid] = record
+              end
+            when "DELETED"
+              if @podInventoryHash.key?(uid)
+                @podInventoryHash.delete(uid)
+              else
+                $log.info("in_kube_podinventory::merge_updates: key did not exist in hash so unable to delete.")
+              end
+            when "BOOKMARK"
+              $log.info("in_kube_podinventory::merge_updates: received a BOOKMARK event.")
+            else
+              $log.info("in_kube_podinventory::merge_updates: something went wrong and didn't enter any cases for switch, notice type was #{record["NoticeType"]}")
+            end
+          end
+
+          # remove all looked at uids from the noticeHash
+          uidList.each do |uid|
+            @noticeHash.delete(uid)
+          end
+          # TODO: copy noticeHash to tempHash and use tempHash to loop through so we dont lock on it for a long time
+
+          noticeHashLockTotalTime = ((Time.now.to_f * 1000).to_i - noticeHashLockStartTime)
+          $log.info("in_kube_podinventory::merge_updates : notice hash lock total time = #{noticeHashLockTotalTime}")
+          $log.info("in_kube_podinventory::merge_updates : number of pods in @podInventoryHash = #{@podInventoryHash.size}, size = ")
+        }
+        parse_and_emit_merge_updates(@podInventoryHash)
+
+        # Adding telemetry to send pod telemetry every 5 minutes
+        timeDifference = (DateTime.now.to_time.to_i - @@podTelemetryTimeTracker).abs
+        timeDifferenceInMinutes = timeDifference / 60
+        if (timeDifferenceInMinutes >= 5)
+          telemetryFlush = true
+        end
+
+        # Flush AppInsights telemetry once all the processing is done
+        if telemetryFlush == true
+          telemetryProperties = {}
+          telemetryProperties["Computer"] = @@hostName
+          telemetryProperties["PODS_CHUNK_SIZE"] = @PODS_CHUNK_SIZE
+          telemetryProperties["PODS_EMIT_STREAM_BATCH_SIZE"] = @PODS_EMIT_STREAM_BATCH_SIZE
+          telemetryProperties["WatchRestartCount"] = @watchRestartCount
+          # reset watchRestartCount
+          @watchRestartCount = 0
+          ApplicationInsightsUtility.sendCustomEvent("KubePodInventoryHeartBeatEvent", telemetryProperties)
+          ApplicationInsightsUtility.sendMetricTelemetry("PodCount", @podCount, {})
+          # TODO: fix serviceCount => cant get actual value unless we watch for it or call it every minute
+          #     get service count in merge_updates so it happens every minute
+          ApplicationInsightsUtility.sendMetricTelemetry("ServiceCount", @serviceCount, {})
+          telemetryProperties["ControllerData"] = @controllerData.to_json
+          ApplicationInsightsUtility.sendMetricTelemetry("ControllerCount", @controllerSet.length, telemetryProperties)
+          if @winContainerCount > 0
+            telemetryProperties["ClusterWideWindowsContainersCount"] = @winContainerCount
+            ApplicationInsightsUtility.sendCustomEvent("WindowsContainerInventoryEvent", telemetryProperties)
+          end
+          ApplicationInsightsUtility.sendMetricTelemetry("PodInventoryE2EProcessingLatencyMs", @podInventoryE2EProcessingLatencyMs, telemetryProperties)
+          ApplicationInsightsUtility.sendMetricTelemetry("PodsAPIE2ELatencyMs", @podsAPIE2ELatencyMs, telemetryProperties)
+          @@podTelemetryTimeTracker = DateTime.now.to_time.to_i
+        end
+      rescue => errorStr
+        $log.warn "in_kube_podinventory::merge_updates:Failed in merge_updates: #{errorStr}"
+        $log.debug_backtrace(errorStr.backtrace)
+        ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
+      end
+    end
+
     def run_periodic
       @mutex.lock
       done = @finished
@@ -392,11 +631,11 @@ module Fluent::Plugin
         @mutex.unlock
         if !done
           begin
-            $log.info("in_kube_podinventory::run_periodic.enumerate.start #{Time.now.utc.iso8601}")
-            enumerate
-            $log.info("in_kube_podinventory::run_periodic.enumerate.end #{Time.now.utc.iso8601}")
+            $log.info("in_kube_podinventory::run_periodic.merge_updates.start #{Time.now.utc.iso8601}")
+            merge_updates
+            $log.info("in_kube_podinventory::run_periodic.merge_updates.end #{Time.now.utc.iso8601}")
           rescue => errorStr
-            $log.warn "in_kube_podinventory::run_periodic: enumerate Failed to retrieve pod inventory: #{errorStr}"
+            $log.warn "in_kube_podinventory::run_periodic: merge_updates Failed to retrieve pod inventory: #{errorStr}"
             ApplicationInsightsUtility.sendExceptionTelemetry(errorStr)
           end
         end

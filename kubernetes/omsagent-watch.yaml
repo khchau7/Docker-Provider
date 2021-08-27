@@ -333,8 +333,8 @@ metadata:
 type: Opaque
 data:
   #BASE64 ENCODED (Both WSID & KEY) INSIDE DOUBLE QUOTE ("")
-  WSID: "VALUE_WSID"
-  KEY: "VALUE_KEY"
+  WSID: "NDAzMWRlYjctNzliZS00NTgxLThhMzAtNDdiY2FhMzU3YmE2Cg=="
+  KEY: "WUZQZG9FR2ttYlQzVkJwWm85VWkyUlJLR2ErVkVETE9sQWJTMTdzOEVyVXpHejZPWER2TVc0bVhoYzlPb0lVZEc2OTdjSitFbDBmVlRyT0x3SWpFVVE9PQo="
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -368,8 +368,8 @@ spec:
             value: "3"       
       containers:
         - name: omsagent
-          image: "mcr.microsoft.com/azuremonitor/containerinsights/ciprod:ciprod06112021"
-          imagePullPolicy: IfNotPresent
+          image: "mcr.microsoft.com/azuremonitor/containerinsights/cidev:khushi-test-73"
+          imagePullPolicy: Always
           resources:
             limits:
               cpu: 500m
@@ -380,11 +380,13 @@ spec:
           env:
             # azure devops pipeline uses AKS_RESOURCE_ID and AKS_REGION hence ensure to uncomment these
             - name: AKS_RESOURCE_ID
-              value: "VALUE_AKS_RESOURCE_ID_VALUE"
+              value: "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/khushi-watch-test/providers/Microsoft.ContainerService/managedClusters/khushi-watch-test"
             - name: AKS_REGION
-              value: "VALUE_AKS_RESOURCE_REGION_VALUE"
+              value: "West US 2"
             # this used for e2e test and setting this just emits some additional log statements which used for the e2e tests
             - name: ISTEST  
+              value: "true"
+            - name: USEMMAP
               value: "true"
             #Uncomment below two lines for ACS clusters and set the cluster names manually. Also comment out the above two lines for ACS clusters
             #- name: ACS_RESOURCE_NAME
@@ -446,8 +448,8 @@ spec:
             timeoutSeconds: 15
 #Only in sidecar scraping mode
         - name: omsagent-prometheus
-          image: "mcr.microsoft.com/azuremonitor/containerinsights/ciprod:ciprod06112021"
-          imagePullPolicy: IfNotPresent
+          image: "mcr.microsoft.com/azuremonitor/containerinsights/cidev:khushi-test-73"
+          imagePullPolicy: Always
           resources:
             limits:
               cpu: 500m
@@ -458,9 +460,9 @@ spec:
           env:
             # azure devops pipeline uses AKS_RESOURCE_ID and AKS_REGION hence ensure to uncomment these
             - name: AKS_RESOURCE_ID
-              value: "VALUE_AKS_RESOURCE_ID_VALUE"
+              value: "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/khushi-watch-test/providers/Microsoft.ContainerService/managedClusters/khushi-watch-test"
             - name: AKS_REGION
-              value: "VALUE_AKS_RESOURCE_REGION_VALUE"
+              value: "West US 2"
             #Uncomment below two lines for ACS clusters and set the cluster names manually. Also comment out the above two lines for ACS clusters
             #- name: ACS_RESOURCE_NAME
             #  value: "my_acs_cluster_name"
@@ -589,8 +591,8 @@ spec:
       serviceAccountName: omsagent
       containers:
         - name: omsagent
-          image: "mcr.microsoft.com/azuremonitor/containerinsights/ciprod:ciprod06112021"
-          imagePullPolicy: IfNotPresent
+          image: "mcr.microsoft.com/azuremonitor/containerinsights/cidev:khushi-test-73"
+          imagePullPolicy: Always
           resources:
             limits:
               cpu: 1
@@ -600,12 +602,14 @@ spec:
               memory: 250Mi
           env:
             - name: AKS_RESOURCE_ID
-              value: "VALUE_AKS_RESOURCE_ID_VALUE"
+              value: "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/khushi-watch-test/providers/Microsoft.ContainerService/managedClusters/khushi-watch-test"
             - name: AKS_REGION
-              value: "VALUE_AKS_RESOURCE_REGION_VALUE"
+              value: "West US 2"
             # this used for e2e test and setting this just emits some additional log statements which used for the e2e tests
             - name: ISTEST  
-              value: "true"  
+              value: "true"
+            - name: USEMMAP
+              value: "true"
             # Uncomment below two lines for ACS clusters and set the cluster names manually. Also comment out the above two lines for ACS clusters
             #- name: ACS_RESOURCE_NAME
             #  value: "my_acs_cluster_name"
@@ -651,15 +655,15 @@ spec:
             - mountPath: /etc/config/osm-settings
               name: osm-settings-vol-config
               readOnly: true
-          livenessProbe:
-            exec:
-              command:
-                - /bin/bash
-                - -c
-                - /opt/livenessprobe.sh
-            initialDelaySeconds: 60
-            periodSeconds: 60
-            timeoutSeconds: 15
+          # livenessProbe:
+          #   exec:
+          #     command:
+          #       - /bin/bash
+          #       - -c
+          #       - /opt/livenessprobe.sh
+          #   initialDelaySeconds: 60
+          #   periodSeconds: 60
+          #   timeoutSeconds: 15
       affinity:
         nodeAffinity:
           # affinity to schedule on to ephemeral os node if its available
@@ -679,6 +683,10 @@ spec:
                     operator: In
                     values:
                     - linux
+                  - key: watch-test
+                    operator: In
+                    values:
+                    - watch
                   - key: type
                     operator: NotIn
                     values:
@@ -769,9 +777,9 @@ spec:
          env:
           # azure devops pipeline uses AKS_RESOURCE_ID and AKS_REGION hence ensure to uncomment these
           - name: AKS_RESOURCE_ID
-            value: "VALUE_AKS_RESOURCE_ID_VALUE"
+            value: "/subscriptions/b4b0cbab-64dc-42bc-9d95-ea7c8d0cf188/resourcegroups/khushi-watch-test/providers/Microsoft.ContainerService/managedClusters/khushi-watch-test"
           - name: AKS_REGION
-            value: "VALUE_AKS_RESOURCE_REGION_VALUE"
+            value: "West US 2"
           #- name: ACS_RESOURCE_NAME
           #  value: "my_acs_cluster_name"
           - name: CONTROLLER_TYPE

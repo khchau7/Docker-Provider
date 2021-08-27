@@ -52,7 +52,12 @@ sudo apt-get install ruby2.6 ruby2.6-dev gcc make -y
 gem install fluentd -v "1.12.2" --no-document
 fluentd --setup ./fluent
 gem install gyoku iso8601 --no-doc
-
+# kubeclient gem
+sudo apt-get install libmagickwand-dev -y
+# sudo gem install kubeclient --no-document
+sudo gem install kubeclient-4.9.2.gem
+# mmap2 gem
+sudo gem install mmap2
 
 rm -f $TMPDIR/docker-cimprov*.sh
 rm -f $TMPDIR/azure-mdsd*.deb
